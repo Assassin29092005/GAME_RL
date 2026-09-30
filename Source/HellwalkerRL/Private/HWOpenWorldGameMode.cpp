@@ -11,7 +11,6 @@
 #include "HWSaveGame.h"
 #include "HWSessionSubsystem.h"
 #include "HWSites.h"
-#include "HWCore/HWPayoffTable.h"
 #include "HWCore/HWSim.h"
 #include "Camera/CameraActor.h"
 #include "Components/SkeletalMeshComponent.h"
@@ -89,7 +88,6 @@ AHWOpenWorldGameMode::AHWOpenWorldGameMode()
 void AHWOpenWorldGameMode::InitGame(const FString& MapName, const FString& Options, FString& ErrorMessage)
 {
 	Super::InitGame(MapName, Options, ErrorMessage);
-	HW::DerivedPayoffs();
 	const TCHAR* Cmd = FCommandLine::Get();
 	FParse::Value(Cmd, TEXT("HWWorldSeed="), WorldSeed);
 	bNoSave = FParse::Param(Cmd, TEXT("HWNoSave"));
@@ -395,7 +393,7 @@ void AHWOpenWorldGameMode::NewGame(EHWPlayMode Mode)
 {
 	UHWSaveGame::Erase();
 	Save = UHWSaveGame::NewGame(Mode);
-	if (UHWSessionSubsystem* S = GetGameInstance()->GetSubsystem<UHWSessionSubsystem>()) { S->ResetModel(); }
+	if (UHWSessionSubsystem* S = GetGameInstance()->GetSubsystem<UHWSessionSubsystem>()) { S->ResetMemory(); }
 	WriteSave();
 	bSaveExists = true;
 	RefreshSites();

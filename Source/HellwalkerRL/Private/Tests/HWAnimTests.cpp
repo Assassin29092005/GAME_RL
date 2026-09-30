@@ -39,29 +39,29 @@ bool FHWAnimFrameLockTest::RunTest(const FString& Parameters)
 	int32 Checked = 0;
 	for (int32 I = 1; I < HW::NumMoves; ++I)
 	{
-		const HW::FMoveData& M = HW::Move(static_cast<HW::EMoveId>(I));
-		if (!M.IsAttack()) { continue; }
+		const HW::FMoveData& Mv = HW::Move(static_cast<HW::EMoveId>(I));
+		if (!Mv.IsAttack()) { continue; }
 		++Checked;
-		const float AtImpact = HWWarpMoveTime(M, C, static_cast<float>(M.Startup));
+		const float AtImpact = HWWarpMoveTime(Mv, C, static_cast<float>(Mv.Startup));
 		if (!FMath::IsNearlyEqual(AtImpact, C.Contact, 1e-4f))
 		{
-			AddError(FString::Printf(TEXT("%hs: clip time at the impact frame is %.4f, contact is %.4f"), M.Name, AtImpact, C.Contact));
+			AddError(FString::Printf(TEXT("%hs: clip time at the impact frame is %.4f, contact is %.4f"), Mv.Name, AtImpact, C.Contact));
 		}
 		// Before impact the pose must not already be past contact (a swing must not land early).
-		for (int32 T = 0; T < M.Startup; ++T)
+		for (int32 T = 0; T < Mv.Startup; ++T)
 		{
-			if (HWWarpMoveTime(M, C, static_cast<float>(T)) > C.Contact + 1e-4f)
+			if (HWWarpMoveTime(Mv, C, static_cast<float>(T)) > C.Contact + 1e-4f)
 			{
-				AddError(FString::Printf(TEXT("%hs: frame %d already shows the contact pose (impact %d)"), M.Name, T, M.Startup));
+				AddError(FString::Printf(TEXT("%hs: frame %d already shows the contact pose (impact %d)"), Mv.Name, T, Mv.Startup));
 				break;
 			}
 		}
 		// After impact: the follow-through only goes forward.
 		float Last = AtImpact;
-		for (int32 T = M.Startup + 1; T <= M.TotalFrames(); ++T)
+		for (int32 T = Mv.Startup + 1; T <= Mv.TotalFrames(); ++T)
 		{
-			const float Now = HWWarpMoveTime(M, C, static_cast<float>(T));
-			if (Now + 1e-4f < Last) { AddError(FString::Printf(TEXT("%hs: follow-through runs backwards at frame %d"), M.Name, T)); break; }
+			const float Now = HWWarpMoveTime(Mv, C, static_cast<float>(T));
+			if (Now + 1e-4f < Last) { AddError(FString::Printf(TEXT("%hs: follow-through runs backwards at frame %d"), Mv.Name, T)); break; }
 			Last = Now;
 		}
 	}
@@ -117,29 +117,29 @@ bool FHWAnimCastsTest::RunTest(const FString& Parameters)
 		TestEqual(FString::Printf(TEXT("%s: every authored clip loads"), *Name.ToString()), Set->MissingClips, 0);
 		for (int32 I = 1; I < HW::NumMoves; ++I)
 		{
-			const HW::FMoveData& M = HW::Move(static_cast<HW::EMoveId>(I));
-			const FHWClip& C = Set->Move(M.Id);
-			if (!C.IsValid() || !M.IsAttack()) { continue; }
+			const HW::FMoveData& Mv = HW::Move(static_cast<HW::EMoveId>(I));
+			const FHWClip& C = Set->Move(Mv.Id);
+			if (!C.IsValid() || !Mv.IsAttack()) { continue; }
 			if (C.Contact < C.Start || C.Contact > C.End)
 			{
-				AddError(FString::Printf(TEXT("%s %hs: no measured contact"), *Name.ToString(), M.Name));
+				AddError(FString::Printf(TEXT("%s %hs: no measured contact"), *Name.ToString(), Mv.Name));
 				continue;
 			}
 			// Legibility: a sweep's weapon crosses toward the side its hitbox tracks.
-			if (M.Coverage == HW::ECoverage::SweepLeft && C.SweepSide < 0.3f)
+			if (Mv.Coverage == HW::ECoverage::SweepLeft && C.SweepSide < 0.3f)
 			{
 				AddError(FString::Printf(TEXT("%s %hs: clip %s crosses %+.2f, must cross to the attacker's right (> +0.3)"),
-					*Name.ToString(), M.Name, *C.Anim->GetName(), C.SweepSide));
+					*Name.ToString(), Mv.Name, *C.Anim->GetName(), C.SweepSide));
 			}
-			if (M.Coverage == HW::ECoverage::SweepRight && C.SweepSide > -0.3f)
+			if (Mv.Coverage == HW::ECoverage::SweepRight && C.SweepSide > -0.3f)
 			{
 				AddError(FString::Printf(TEXT("%s %hs: clip %s crosses %+.2f, must cross to the attacker's left (< -0.3)"),
-					*Name.ToString(), M.Name, *C.Anim->GetName(), C.SweepSide));
+					*Name.ToString(), Mv.Name, *C.Anim->GetName(), C.SweepSide));
 			}
 			// Playback rate the frame lock needs to land contact on the impact frame.
-			const float Rate = (C.Contact - C.Start) / FMath::Max(static_cast<float>(M.Startup) / HW::FramesPerSecond, 0.001f);
+			const float Rate = (C.Contact - C.Start) / FMath::Max(static_cast<float>(Mv.Startup) / HW::FramesPerSecond, 0.001f);
 			AddInfo(FString::Printf(TEXT("%s %-16hs %-28s contact %.2f s  side %+.2f  startup rate %.2fx"),
-				*Name.ToString(), M.Name, *C.Anim->GetName(), C.Contact, C.SweepSide, Rate));
+				*Name.ToString(), Mv.Name, *C.Anim->GetName(), C.Contact, C.SweepSide, Rate));
 		}
 	}
 	if (Loaded == 0) { AddInfo(TEXT("No Fab packs in Content/: nothing to check (the greybox is the fallback).")); }

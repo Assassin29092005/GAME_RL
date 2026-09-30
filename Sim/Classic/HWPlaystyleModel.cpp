@@ -1,6 +1,6 @@
 // Hellwalker — engine-free core. Playstyle model implementation.
 
-#include "HWCore/HWPlaystyleModel.h"
+#include "Classic/HWPlaystyleModel.h"
 
 #include <cmath>
 #include <cstring>

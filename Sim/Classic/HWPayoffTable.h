@@ -1,4 +1,4 @@
-// Hellwalker — engine-free core. The payoff matrix, DERIVED from the combat rules.
+// HellwalkerRL — CLASSIC (reference) brain, tools only. The payoff matrix, DERIVED from the combat rules.
 //
 // PLAN §2.4: "the payoff matrix is where a correct prediction becomes a real counter". B0 found the
 // hand-authored matrix contradicting the frame data (a heavy "armoring through" a light that lands
@@ -13,7 +13,7 @@
 
 #pragma once
 
-#include "HWMoves.h"
+#include "HWCore/HWMoves.h"
 
 namespace HW
 {

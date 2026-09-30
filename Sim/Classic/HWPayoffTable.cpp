@@ -1,6 +1,6 @@
 // Hellwalker — engine-free core. Derived payoff matrix (see header).
 
-#include "HWCore/HWPayoffTable.h"
+#include "Classic/HWPayoffTable.h"
 
 #include "HWCore/HWSim.h"
 

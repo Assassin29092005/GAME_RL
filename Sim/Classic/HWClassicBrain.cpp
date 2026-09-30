@@ -1,34 +1,14 @@
-// Hellwalker — engine-free core. Boss brain implementation.
+// HellwalkerRL — CLASSIC (reference) brain, tools only. Implementation (verbatim from the reference project).
 
-#include "HWCore/HWBossBrain.h"
+#include "Classic/HWClassicBrain.h"
 
-#include "HWCore/HWPayoffTable.h"
+#include "Classic/HWPayoffTable.h"
 
 #include <cmath>
 #include <cstdio>
 
 namespace HW
 {
-	const char* BrainModeName(EBrainMode M)
-	{
-		return M == EBrainMode::Hellwalker ? "Hellwalker" : "Pathbreaker";
-	}
-
-	const char* DecisionKindName(EDecisionKind K)
-	{
-		switch (K)
-		{
-		case EDecisionKind::Script:          return "Script";
-		case EDecisionKind::Substitution:    return "Substitution";
-		case EDecisionKind::LuckyDrawPress:  return "LuckyDrawPress";
-		case EDecisionKind::LuckyDrawAbort:  return "LuckyDrawAbort";
-		case EDecisionKind::PerfectPunish:   return "PerfectPunish";
-		case EDecisionKind::Spacing:         return "Spacing";
-		case EDecisionKind::CapForcedScript: return "CapForcedScript";
-		default:                             return "?";
-		}
-	}
-
 	namespace
 	{
 		// ------------------------------------------------------------------------------------------
@@ -76,64 +56,11 @@ namespace HW
 			return nullptr;
 		}
 
-		// The Ninefold Warden. Chain slots continue a string at the previous attack's cancel frame.
-		const FScriptSlot WardenScript[] = {
-			{ ESlotType::Reposition, EMoveId::BApproach,     false },
-			{ ESlotType::Attack,     EMoveId::BFastSlash,    false },
-			{ ESlotType::Attack,     EMoveId::BFastSlash,    true  },
-			{ ESlotType::Attack,     EMoveId::BHeavyCleave,  true  },
-			{ ESlotType::Defend,     EMoveId::BGuard,        false },
-			{ ESlotType::Attack,     EMoveId::BSweepLeft,    false },
-			{ ESlotType::Attack,     EMoveId::BFeintMid,     true  },
-			{ ESlotType::Reposition, EMoveId::BBackstep,     false },
-			{ ESlotType::Attack,     EMoveId::BKillerThrust, false },
-			{ ESlotType::Attack,     EMoveId::BFastSlash,    false },
-			{ ESlotType::Attack,     EMoveId::BSweepRight,   true  },
-			{ ESlotType::Attack,     EMoveId::BDelayedHeavy, true  },
-			{ ESlotType::Defend,     EMoveId::BCounterStance,false },
-			{ ESlotType::Attack,     EMoveId::BFastSlash,    true  },
-			{ ESlotType::Reposition, EMoveId::BApproach,     false },
-			{ ESlotType::Attack,     EMoveId::BGrab,         false },
-			{ ESlotType::Attack,     EMoveId::BHeavyCleave,  false },
-			{ ESlotType::Attack,     EMoveId::BFastSlash,    true  },
-			{ ESlotType::Reposition, EMoveId::BRetreat,      false },
-		};
-
-		// The Monkey Sage (the open world's second shrine): quick, evasive, fond of the sweep and the feint —
-		// fewer heavies, more repositioning. Same move table, same rules, a different habit of its own.
-		const FScriptSlot SageScript[] = {
-			{ ESlotType::Reposition, EMoveId::BDashIn,        false },
-			{ ESlotType::Attack,     EMoveId::BFastSlash,     false },
-			{ ESlotType::Attack,     EMoveId::BSweepRight,    true  },
-			{ ESlotType::Reposition, EMoveId::BSideStepL,     false },
-			{ ESlotType::Attack,     EMoveId::BFeintEarly,    false },
-			{ ESlotType::Attack,     EMoveId::BSweepLeft,     true  },
-			{ ESlotType::Defend,     EMoveId::BCounterStance, false },
-			{ ESlotType::Attack,     EMoveId::BFastSlash,     false },
-			{ ESlotType::Attack,     EMoveId::BFastSlash,     true  },
-			{ ESlotType::Attack,     EMoveId::BSweepLeftLate, true  },
-			{ ESlotType::Reposition, EMoveId::BBackstep,      false },
-			{ ESlotType::Attack,     EMoveId::BKillerThrust,  false },
-			{ ESlotType::Reposition, EMoveId::BApproach,      false },
-			{ ESlotType::Attack,     EMoveId::BFeintMid,      false },
-			{ ESlotType::Attack,     EMoveId::BHeavySweepRight, true },
-			{ ESlotType::Defend,     EMoveId::BGuard,         false },
-			{ ESlotType::Defend,     EMoveId::BGuard,         false },
-			{ ESlotType::Attack,     EMoveId::BGrab,          false },
-			{ ESlotType::Attack,     EMoveId::BDelayedHeavy,  false },
-		};
-
 		constexpr EMoveId AbortOnWhiff[] = { EMoveId::BGuard, EMoveId::BCounterStance, EMoveId::BBackstep, EMoveId::BSideStepL, EMoveId::BSideStepR };
 		constexpr EMoveId AbortOnParried[] = { EMoveId::BGuard, EMoveId::BCounterStance, EMoveId::BBackstep, EMoveId::BFeintEarly, EMoveId::BFeintMid, EMoveId::BFeintLate };
 
 		float Lerp(float A, float B, float T) { return A + (B - A) * T; }
 		float Clamp01(float X) { return X < 0.f ? 0.f : (X > 1.f ? 1.f : X); }
-	}
-
-	int32_t DefaultWardenScript(const FScriptSlot*& OutSlots)
-	{
-		OutSlots = WardenScript;
-		return static_cast<int32_t>(sizeof(WardenScript) / sizeof(WardenScript[0]));
 	}
 
 	void ApplyScriptTuning(int32_t Index, FBrainConfig& Cfg)
@@ -143,17 +70,7 @@ namespace HW
 		Cfg.ShadowGain = Index == 1 ? 0.06f : Defaults.ShadowGain;
 	}
 
-	int32_t BossScript(int32_t Index, const FScriptSlot*& OutSlots)
-	{
-		if (Index == 1)
-		{
-			OutSlots = SageScript;
-			return static_cast<int32_t>(sizeof(SageScript) / sizeof(SageScript[0]));
-		}
-		return DefaultWardenScript(OutSlots);
-	}
-
-	FBossBrain::FBossBrain()
+	FClassicBrain::FClassicBrain()
 	{
 		const FScriptSlot* Slots = nullptr;
 		const int32_t N = DefaultWardenScript(Slots);
@@ -161,7 +78,7 @@ namespace HW
 		Reset(0);
 	}
 
-	void FBossBrain::SetScript(const FScriptSlot* Slots, int32_t Count)
+	void FClassicBrain::SetScript(const FScriptSlot* Slots, int32_t Count)
 	{
 		ScriptLen = Count < MaxScript ? Count : MaxScript;
 		for (int32_t I = 0; I < ScriptLen; ++I) { Script[I] = Slots[I]; }
@@ -169,7 +86,7 @@ namespace HW
 		bSlotOpen = false;
 	}
 
-	void FBossBrain::Reset(int32_t Seed)
+	void FClassicBrain::Reset(int32_t Seed)
 	{
 		Rng.Initialize(Seed);
 		ScriptIndex = 0;
@@ -201,14 +118,14 @@ namespace HW
 	// Payoffs
 	// ----------------------------------------------------------------------------------------------
 
-	float FBossBrain::BasePayoff(EMoveId BossMove, ESym PlayerSym)
+	float FClassicBrain::BasePayoff(EMoveId BossMove, ESym PlayerSym)
 	{
 		const FPayoffRow* R = FindRow(BossMove);
 		if (R == nullptr || !IsPlayerSym(PlayerSym)) { return 0.f; }
 		return R->V[SymIndex(PlayerSym)];
 	}
 
-	bool FBossBrain::IsWhiffable(ESym S)
+	bool FClassicBrain::IsWhiffable(ESym S)
 	{
 		switch (S)
 		{
@@ -220,7 +137,7 @@ namespace HW
 		}
 	}
 
-	int32_t FBossBrain::LeadFor(ESym PlayerSym) const
+	int32_t FClassicBrain::LeadFor(ESym PlayerSym) const
 	{
 		if (Model != nullptr && Model->LeadEvidence(PlayerSym) >= Cfg.MinLeadEvidence)
 		{
@@ -229,7 +146,7 @@ namespace HW
 		return FPayoffTable::TypicalLead(PlayerSym);
 	}
 
-	float FBossBrain::BiteFor(ESym PlayerSym) const
+	float FClassicBrain::BiteFor(ESym PlayerSym) const
 	{
 		if (Model != nullptr && Model->BiteEvidence(PlayerSym) >= Cfg.MinLeadEvidence)
 		{
@@ -238,7 +155,7 @@ namespace HW
 		return 1.f; // until shown otherwise, a player times to what the wind-up shows
 	}
 
-	float FBossBrain::Payoff(EMoveId BossMove, ESym PlayerSym) const
+	float FClassicBrain::Payoff(EMoveId BossMove, ESym PlayerSym) const
 	{
 		if (Cfg.bDerivedPayoffs)
 		{
@@ -319,13 +236,13 @@ namespace HW
 	// Scoring
 	// ----------------------------------------------------------------------------------------------
 
-	bool FBossBrain::InRange(EMoveId Id, float Distance) const
+	bool FClassicBrain::InRange(EMoveId Id, float Distance) const
 	{
 		const FMoveData& M = Move(Id);
 		return !M.IsAttack() || Distance <= M.Range * Cfg.InRangeFactor;
 	}
 
-	float FBossBrain::IncomingThreatPayoff(const FMoveData& M, int32_t IncomingIn)
+	float FClassicBrain::IncomingThreatPayoff(const FMoveData& M, int32_t IncomingIn)
 	{
 		// A player swing is visibly on its way and lands IncomingIn frames after this commit. This is
 		// animation reading (it is on screen), not input reading: FDuel state as of the previous frame.
@@ -345,7 +262,7 @@ namespace HW
 		}
 	}
 
-	void FBossBrain::ScoreCandidate(EMoveId Cand, EMoveId ScriptedMove, float Margin, float Distance, int32_t IncomingIn, FCandidateScore& Out) const
+	void FClassicBrain::ScoreCandidate(EMoveId Cand, EMoveId ScriptedMove, float Margin, float Distance, int32_t IncomingIn, FCandidateScore& Out) const
 	{
 		const FMoveData& M = Move(Cand);
 		const FPrediction P = Model->PredictAfter(M.Symbol);
@@ -384,7 +301,7 @@ namespace HW
 		Out.Decision = Score - (Cand == ScriptedMove ? 0.f : Margin);
 	}
 
-	void FBossBrain::FinishDecision(FBrainDecision& D, const FCandidateScore* Cands, int32_t NumCands) const
+	void FClassicBrain::FinishDecision(FBrainDecision& D, const FCandidateScore* Cands, int32_t NumCands) const
 	{
 		// argmax over Decision; exact ties prefer the scripted action, then a seeded tie-break.
 		float Best = -1.0e30f;
@@ -430,7 +347,7 @@ namespace HW
 		D.bArgmaxHolds = ChosenDecision >= Best - 1.0e-6f;
 	}
 
-	bool FBossBrain::CapReached() const
+	bool FClassicBrain::CapReached() const
 	{
 		if (ConsecutiveSubs >= Cfg.MaxConsecutiveSubs) { return true; }
 		int32_t N = 0;
@@ -439,10 +356,10 @@ namespace HW
 		return N >= Cfg.MaxSubsInWindow;
 	}
 
-	void FBossBrain::UpdateFloor(int32_t Frame)
+	void FClassicBrain::UpdateFloor(int32_t Frame)
 	{
 		LastFloorCorrection = 0.f;
-		if (Mode != EBrainMode::Hellwalker) { return; }
+		if (BrainMode != EBrainMode::Hellwalker) { return; }
 		// §1.2 as written: Deficit = RefSwingsPerMin - SwingsPerMin; if (Deficit > 0) PressureBias += Deficit * FloorGain.
 		if (Cfg.RefSwingsPerMin > 0.f && Frame >= Cfg.FloorWarmupFrames)
 		{
@@ -480,7 +397,7 @@ namespace HW
 	// Decide — the pure decision function
 	// ----------------------------------------------------------------------------------------------
 
-	FBrainDecision FBossBrain::Decide(const FDuel& Duel, const FScriptSlot& InSlot, int32_t InScriptIndex, EHitOutcome InPrevOutcome,
+	FBrainDecision FClassicBrain::Decide(const FDuel& Duel, const FScriptSlot& InSlot, int32_t InScriptIndex, EHitOutcome InPrevOutcome,
 		bool bInOwnDefence, float Distance) const
 	{
 		FBrainDecision D;
@@ -510,7 +427,7 @@ namespace HW
 			D.Ctx1 = Sc.Symbol;
 		}
 
-		if (Mode == EBrainMode::Pathbreaker || Model == nullptr)
+		if (BrainMode == EBrainMode::Pathbreaker || Model == nullptr)
 		{
 			D.Kind = EDecisionKind::Script;
 			std::snprintf(D.Reason, sizeof(D.Reason), "script %s", Sc.Name);
@@ -729,7 +646,7 @@ namespace HW
 	// Think — once per frame
 	// ----------------------------------------------------------------------------------------------
 
-	bool FBossBrain::Think(FDuel& Duel, float Distance, FBrainDecision* OutDecision)
+	bool FClassicBrain::ThinkAt(FDuel& Duel, float Distance, FBrainDecision* OutDecision)
 	{
 		FFighter& B = Duel.Get(ESide::Boss);
 		if (Duel.IsOver() || !B.IsActionable() || ScriptLen <= 0) { return false; }
@@ -803,7 +720,7 @@ namespace HW
 		return true;
 	}
 
-	void FBossBrain::OnEvent(const FDuelEvent& E, const FDuel& Duel)
+	void FClassicBrain::OnEvent(const FDuelEvent& E, const FDuel& Duel)
 	{
 		(void)Duel;
 		switch (E.Type)
@@ -841,7 +758,7 @@ namespace HW
 		}
 	}
 
-	bool FBossBrain::PopReadMeter(FReadMeterEvent& Out)
+	bool FClassicBrain::PopReadMeter(FReadMeterEvent& Out)
 	{
 		if (!bReadMeterReady) { return false; }
 		Out = ReadMeter;
@@ -849,21 +766,129 @@ namespace HW
 		return true;
 	}
 
-	float FBossBrain::SwingsPerMin(int32_t Frame) const
+	float FClassicBrain::SwingsPerMin(int32_t Frame) const
 	{
 		const float Minutes = static_cast<float>(Frame > 0 ? Frame : 1) / (60.f * FramesPerSecond);
 		return static_cast<float>(SwingCount) / Minutes;
 	}
 
-	float FBossBrain::ShadowScriptRate(int32_t Frame) const
+	float FClassicBrain::ShadowScriptRate(int32_t Frame) const
 	{
 		const float ShadowTime = static_cast<float>(Frame) - static_cast<float>(ShadowChosenFrames - ShadowScriptedFrames);
 		return ShadowTime > 60.f ? 3600.f * static_cast<float>(ShadowScriptedSwings) / ShadowTime : 0.f;
 	}
 
-	float FBossBrain::DamagePerMin(int32_t Frame) const
+	float FClassicBrain::DamagePerMin(int32_t Frame) const
 	{
 		const float Minutes = static_cast<float>(Frame > 0 ? Frame : 1) / (60.f * FramesPerSecond);
 		return DamageTotal / Minutes;
+	}
+
+	// ----------------------------------------------------------------------------------------------
+	// IBossBrain
+	// ----------------------------------------------------------------------------------------------
+
+	void FClassicBrain::BeginEncounter(int32_t Seed)
+	{
+		Reset(Seed);
+		Observer.Reset();
+		Symbols.clear();
+		if (Model != nullptr) { Model->Flush(); }
+	}
+
+	bool FClassicBrain::Think(FDuel& Duel, const FDuelGeometry& Geo, FBrainDecision* OutDecision)
+	{
+		return ThinkAt(Duel, Geo.Distance(), OutDecision);
+	}
+
+	void FClassicBrain::OnFrame(const std::vector<FDuelEvent>& Events, const FDuel& Duel, const FDuelGeometry& Geo, ESym PlayerMovement)
+	{
+		(void)Geo;
+		for (const FDuelEvent& E : Events) { OnEvent(E, Duel); }
+		Observer.ProcessFrame(Events, Duel, PlayerMovement, Model, bRecordSymbols ? &Symbols : nullptr);
+	}
+
+	// ----------------------------------------------------------------------------------------------
+	// Symbol observer — PLAN §2.1 cadence
+	// ----------------------------------------------------------------------------------------------
+
+	void FSymbolObserver::Reset()
+	{
+		LastEmitFrame = 0;
+		LastBossCommitFrame = -1;
+		PendingBossMove = EMoveId::None;
+		bBossSwingPending = false;
+		bPlayerCommittedSinceBossSwing = false;
+		NumEmitted = 0;
+	}
+
+	void FSymbolObserver::Emit(ESym S, int32_t Frame, int32_t Lead, FPlaystyleModel* Model, std::vector<FSymbolRecord>* OutLog, int32_t Bit)
+	{
+		if (Model != nullptr) { Model->Observe(S, Lead, Bit); }
+		if (OutLog != nullptr) { OutLog->push_back(FSymbolRecord{ S, Frame, Lead }); }
+		LastEmitFrame = Frame;
+		++NumEmitted;
+	}
+
+	void FSymbolObserver::ProcessFrame(const std::vector<FDuelEvent>& Events, const FDuel& Duel, ESym PlayerMovement,
+		FPlaystyleModel* Model, std::vector<FSymbolRecord>* OutLog)
+	{
+		const FFighter& P = Duel.Get(ESide::Player);
+		for (const FDuelEvent& E : Events)
+		{
+			if (E.Type == EDuelEvent::Commit)
+			{
+				if (E.Side == ESide::Player)
+				{
+					// Timing sample (the "when"): frames BEFORE the impact this press was timed to.
+					int32_t Lead = FPlaystyleModel::NoTiming;
+					int32_t Bit = FPlaystyleModel::NoBait;
+					if (bBossSwingPending && !bPlayerCommittedSinceBossSwing && PendingBossMove != EMoveId::None)
+					{
+						const FMoveData& BM = Move(PendingBossMove);
+						const int32_t Press = E.Frame - LastBossCommitFrame; // on the boss move's own timeline
+						int32_t Anchor = BM.Startup;
+						if (BM.FakeImpactFrame >= 0)
+						{
+							// A bait shows one impact and delivers another: a press nearer the bait was timed to it.
+							Bit = Press * 2 < BM.FakeImpactFrame + BM.Startup ? 1 : 0;
+							Anchor = Bit == 1 ? BM.FakeImpactFrame : BM.Startup;
+						}
+						if (Anchor >= TimingHorizonFrames) { Lead = Anchor - Press; }
+					}
+					Emit(E.Sym, E.Frame, Lead, Model, OutLog, Bit);
+					bPlayerCommittedSinceBossSwing = true;
+				}
+				else
+				{
+					Emit(E.Sym, E.Frame, FPlaystyleModel::NoTiming, Model, OutLog);
+					LastBossCommitFrame = E.Frame;
+					if (Move(E.Move).IsAttack())
+					{
+						bBossSwingPending = true;
+						bPlayerCommittedSinceBossSwing = false;
+						PendingBossMove = E.Move;
+					}
+				}
+			}
+			else if (E.Type == EDuelEvent::Outcome && E.Side == ESide::Boss && bBossSwingPending)
+			{
+				// A boss damage window resolved. No player commitment during it -> a movement symbol
+				// (or Block: holding guard through it IS the commitment).
+				bBossSwingPending = false;
+				PendingBossMove = EMoveId::None;
+				if (!bPlayerCommittedSinceBossSwing)
+				{
+					Emit(P.IsGuarding() || P.bGuardHeld ? ESym::Block : PlayerMovement, E.Frame, FPlaystyleModel::NoTiming, Model, OutLog);
+				}
+			}
+		}
+
+		// Watchdog — a turtling player still generates data.
+		const int32_t Now = Duel.Frame;
+		if (Now - LastEmitFrame >= WatchdogFrames)
+		{
+			Emit(P.bGuardHeld ? ESym::Block : PlayerMovement, Now, FPlaystyleModel::NoTiming, Model, OutLog);
+		}
 	}
 }

@@ -3,8 +3,14 @@
 This document specifies how to recreate the Hellwalker boss — a keeper that notices your habits and punishes them —
 with a **reinforcement-learning (RL) policy trained from random initialisation**, while keeping every game mechanic
 of the current build: the frame data, the moves, the duel rules, the fairness rules, the Read Meter and the Unreal
-presentation. It is a plan, not a record of existing code: everything under `RL/` and every `FRLEnv` / `UHWRLBrain`
-named here is to be built.
+presentation.
+
+> **Status (HellwalkerRL, 2026-09-30): built.** RL-0 to RL-3 and RL-5 are done; the shipped keeper passes every B0
+> check and the reading test; RL-4 (exploiter league) is not built and RL-6 is the human playtest. The engineering
+> contract is [RL/DESIGN.md](RL/DESIGN.md); results, status and the deviations the work forced (C++ inference instead
+> of NNE, the killer cooldown, the per-window aggression hinge, how reading is measured) are in [README.md](README.md).
+> The brain that plays in Unreal is the engine-free `FRLBrain` (driven by the duel subsystem) rather than a separate
+> `UHWRLBrain`. The text below is the plan as written.
 
 ---
 

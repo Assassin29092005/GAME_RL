@@ -276,29 +276,48 @@ void AHWHUD::DrawOverlay(UHWDuelSubsystem* Duel)
 	const HW::FEncounter& E = *Duel->GetEncounter();
 	const HW::FFighter& P = E.Duel.Get(HW::ESide::Player);
 	const HW::FFighter& B = E.Duel.Get(HW::ESide::Boss);
-	const HW::FBrainDecision& D = E.Brain.LastDecision();
+	const HW::FBrainDecision& D = E.LastDecision();
 	const HW::FEncounterStats& St = E.Stats;
+	const HW::IBossBrain* Brain = E.Brain();
+	const HW::FRLBrain* RL = Duel->GetRLBrain();
 
 	TArray<FString> Lines;
 	Lines.Add(FString::Printf(TEXT("frame %d   mean frame %.2f ms   %s   distance %.0f"), E.Duel.Frame, Duel->GetMeanFrameMs(),
-		*ToFString(HW::BrainModeName(E.Brain.GetMode())), Duel->FighterDistance()));
+		Brain != nullptr ? UTF8_TO_TCHAR(Brain->Name()) : TEXT("no brain"), Duel->FighterDistance()));
 	Lines.Add(FString::Printf(TEXT("player  %-10s %-14s T%-3d HP %5.0f  SC %5.1f  FA %+d"), *ToFString(HW::FighterStateName(P.State)),
 		*ToFString(HW::Move(P.Move).Name), P.T, P.Health, P.ShaChi, E.Duel.FrameAdvantage(HW::ESide::Player)));
 	Lines.Add(FString::Printf(TEXT("boss    %-10s %-14s T%-3d HP %5.0f  SC %5.1f"), *ToFString(HW::FighterStateName(B.State)),
 		*ToFString(HW::Move(B.Move).Name), B.T, B.Health, B.ShaChi));
-	Lines.Add(FString::Printf(TEXT("decision #%d  slot %s%s  %s -> %s  [%s]  prev %s  FA %+d"), E.Brain.Decisions(),
-		*ToFString(HW::SlotTypeName(D.Slot)), D.bChain ? TEXT(" chain") : TEXT(""), *ToFString(HW::Move(D.Scripted).Name),
-		*ToFString(HW::Move(D.Chosen).Name), *ToFString(HW::DecisionKindName(D.Kind)), *ToFString(HW::OutcomeName(D.PrevOutcome)), D.FrameAdvantage));
-	Lines.Add(FString::Printf(TEXT("read %.2f bits  margin %.2f  predicted %s p=%.2f  argmax %s"), D.ReadBits, D.Margin,
-		*ToFString(HW::SymName(D.Predicted)), D.PredictedP, D.bArgmaxHolds ? TEXT("ok") : TEXT("VIOLATED")));
-	Lines.Add(FString::Printf(TEXT("pressure bias %.2f  floor correction %.3f  shadow swing deficit %d  swings/min %.1f  dmg/min %.1f"),
-		E.Brain.GetPressureBias(), D.FloorCorrection, E.Brain.ShadowSwingDeficit(), St.SwingsPerMin(), St.DamagePerMin()));
-	Lines.Add(FString::Printf(TEXT("counters landed %d  substitutions %d  decisions %d  symbols %d  player dmg taken %.0f  boss dmg taken %.0f"),
-		St.CountersLanded, E.Brain.Substitutions(), St.Decisions, St.Symbols, St.PlayerDamageTaken, St.BossDamageTaken));
-	for (int32 K = 0; K < 3 && K < D.NumTop; ++K)
+	const int32 Decisions = Brain != nullptr ? Brain->Decisions() : 0;
+	if (RL != nullptr)
 	{
-		Lines.Add(FString::Printf(TEXT("  top%d %-14s E %+5.2f  score %+5.2f  decision %+5.2f"), K + 1, *ToFString(HW::Move(D.Top[K].Move).Name),
-			D.Top[K].Expected, D.Top[K].Score, D.Top[K].Decision));
+		// The RL keeper: what it chose and how sure it was, what its read head expects you to answer, how it rates the
+		// position, and how much of you it remembers (RL.md section 5.3: the F3 overlay).
+		const HW::FRLSession* Mem = Duel->GetSession() != nullptr ? &Duel->GetSession()->GetMemory() : nullptr;
+		Lines.Add(FString::Printf(TEXT("decision #%d  %s  [%s]  %s  prev %s  FA %+d  value %+.2f"), Decisions,
+			D.Chosen != HW::EMoveId::None ? *ToFString(HW::Move(D.Chosen).Name) : TEXT("Wait"), *ToFString(HW::DecisionKindName(D.Kind)),
+			D.bChain ? TEXT("chain") : TEXT(""), *ToFString(HW::OutcomeName(D.PrevOutcome)), D.FrameAdvantage, D.Value));
+		Lines.Add(FString::Printf(TEXT("read head: you will %s  p=%.2f  (%.2f bits of certainty)"), *ToFString(HW::SymName(D.Predicted)), D.PredictedP, D.ReadBits));
+		if (Mem != nullptr)
+		{
+			Lines.Add(FString::Printf(TEXT("memory: fight %d of this session, %d exchanges remembered, %d keeper swings seen"),
+				Mem->FightIndex + 1, Mem->NumTokens, Mem->BossSwingsSeen));
+		}
+		Lines.Add(FString::Printf(TEXT("swings/min %.1f  dmg/min %.1f  reads landed %d  player dmg taken %.0f  boss dmg taken %.0f"),
+			St.SwingsPerMin(), St.DamagePerMin(), St.CountersLanded, St.PlayerDamageTaken, St.BossDamageTaken));
+		for (int32 K = 0; K < 3 && K < D.NumTop; ++K)
+		{
+			Lines.Add(FString::Printf(TEXT("  top%d %-14s p %.2f  logit %+6.2f"), K + 1,
+				D.Top[K].Move != HW::EMoveId::None ? *ToFString(HW::Move(D.Top[K].Move).Name) : TEXT("Wait"), D.Top[K].Score, D.Top[K].Expected));
+		}
+	}
+	else
+	{
+		Lines.Add(FString::Printf(TEXT("decision #%d  slot %s%s  %s -> %s  [%s]  prev %s  FA %+d"), Decisions,
+			*ToFString(HW::SlotTypeName(D.Slot)), D.bChain ? TEXT(" chain") : TEXT(""), *ToFString(HW::Move(D.Scripted).Name),
+			*ToFString(HW::Move(D.Chosen).Name), *ToFString(HW::DecisionKindName(D.Kind)), *ToFString(HW::OutcomeName(D.PrevOutcome)), D.FrameAdvantage));
+		Lines.Add(FString::Printf(TEXT("swings/min %.1f  dmg/min %.1f  decisions %d  player dmg taken %.0f  boss dmg taken %.0f"),
+			St.SwingsPerMin(), St.DamagePerMin(), St.Decisions, St.PlayerDamageTaken, St.BossDamageTaken));
 	}
 	Lines.Add(FString::Printf(TEXT("telemetry %s"), *Duel->GetTelemetryPath()));
 	for (const FString& L : Duel->GetDecisionLog()) { Lines.Add(L); }
@@ -355,10 +374,14 @@ void AHWHUD::DrawEndScreen(UHWDuelSubsystem* Duel)
 	const UHWSessionSubsystem* Session = Duel->GetSession();
 	if (Session != nullptr && !Session->bBlind)
 	{
-		// §1.1's naming test, from the boss's side: the habit it has the strongest read on.
-		const HW::FPrediction Pred = Session->GetModel().PredictAfter(HW::ESym::BFast);
-		Text(FString::Printf(TEXT("Your most readable habit against a fast swing:  %s  (%.0f%%)"), *HumanSym(Pred.Top), Pred.TopP * 100.f),
-			CX, Canvas->ClipY * 0.33f + 130.f * S, Dim, GEngine->GetMediumFont(), 1.f * S, true);
+		// The naming test (PLAN 1.1), from the keeper's side: what its read head expects of you against a fast swing.
+		HW::ESym Sym = HW::ESym::Neutral;
+		float P = 0.f;
+		if (Session->PredictAnswer(HW::EMoveId::BFastSlash, Sym, P))
+		{
+			Text(FString::Printf(TEXT("What it expects of you against a fast swing:  %s  (%.0f%%)"), *HumanSym(Sym), P * 100.f),
+				CX, Canvas->ClipY * 0.33f + 130.f * S, Dim, GEngine->GetMediumFont(), 1.f * S, true);
+		}
 	}
 	Text(TEXT("[R] fight again - it remembers        [1] / [2] switch tier        [Esc] quit"), CX, Canvas->ClipY * 0.33f + 170.f * S, Ink,
 		GEngine->GetMediumFont(), 1.f * S, true);
@@ -574,9 +597,13 @@ void AHWHUD::DrawDuelResult(AHWOpenWorldGameMode* GM, UHWDuelSubsystem* Duel)
 		GEngine->GetMediumFont(), 1.1f * S, true);
 	if (const UHWSessionSubsystem* Session = Duel->GetSession())
 	{
-		const HW::FPrediction Pred = Session->GetModel().PredictAfter(HW::ESym::BFast);
-		Text(FString::Printf(TEXT("What they have learned: against a fast swing you %s  (%.0f%%)"), *HumanSym(Pred.Top).ToLower(), Pred.TopP * 100.f),
-			CX, Canvas->ClipY * 0.33f + 125.f * S, Dim, GEngine->GetMediumFont(), 1.f * S, true);
+		HW::ESym Sym = HW::ESym::Neutral;
+		float P = 0.f;
+		if (Session->PredictAnswer(HW::EMoveId::BFastSlash, Sym, P))
+		{
+			Text(FString::Printf(TEXT("What they have learned: against a fast swing you %s  (%.0f%%)"), *HumanSym(Sym).ToLower(), P * 100.f),
+				CX, Canvas->ClipY * 0.33f + 125.f * S, Dim, GEngine->GetMediumFont(), 1.f * S, true);
+		}
 	}
 	Text(bWon ? TEXT("The seal breaks...") : TEXT("You wake again..."), CX, Canvas->ClipY * 0.33f + 165.f * S, Dim,
 		GEngine->GetMediumFont(), 1.f * S, true);
@@ -617,12 +644,14 @@ void AHWHUD::DrawEnding(AHWOpenWorldGameMode* GM, UHWDuelSubsystem* Duel, bool b
 		{
 			Y = Canvas->ClipY * 0.52f;
 			Text(TEXT("WHAT THEY LEARNED ABOUT YOU"), CX, Y, Low, GEngine->GetMediumFont(), 1.1f * S, true);
-			const HW::ESym After[] = { HW::ESym::BFast, HW::ESym::BHeavy, HW::ESym::BFeint };
+			const HW::EMoveId After[] = { HW::EMoveId::BFastSlash, HW::EMoveId::BHeavyCleave, HW::EMoveId::BFeintMid };
 			const TCHAR* Names[] = { TEXT("a fast swing"), TEXT("a heavy swing"), TEXT("a feint") };
 			for (int32 I = 0; I < 3; ++I)
 			{
-				const HW::FPrediction Pred = Session->GetModel().PredictAfter(After[I]);
-				Text(FString::Printf(TEXT("against %s  -  %s  (%.0f%%)"), Names[I], *HumanSym(Pred.Top).ToLower(), Pred.TopP * 100.f),
+				HW::ESym Sym = HW::ESym::Neutral;
+				float P = 0.f;
+				if (!Session->PredictAnswer(After[I], Sym, P)) { continue; }
+				Text(FString::Printf(TEXT("against %s  -  %s  (%.0f%%)"), Names[I], *HumanSym(Sym).ToLower(), P * 100.f),
 					CX, Y + (40.f + 34.f * I) * S, Body, GEngine->GetMediumFont(), 1.1f * S, true);
 			}
 		}

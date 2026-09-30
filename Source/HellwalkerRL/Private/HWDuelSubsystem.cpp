@@ -19,11 +19,6 @@
 
 namespace
 {
-	// B0's reference: the scripted boss's mean swings/min across the simulated player population. The
-	// aggression-floor controller's plan-form term steers toward it (PLAN §1.2); the matched-slot shadow
-	// term does the precise work.
-	constexpr float ReferenceSwingsPerMin = 62.f;
-
 	int32 BufferFramesFor(EHWPlayerAction A)
 	{
 		switch (A)
@@ -202,16 +197,25 @@ void UHWDuelSubsystem::ResetEncounter(int32 InSeed)
 	Seed = InSeed >= 0 ? InSeed : S->EncountersStarted * 7919 + 17;
 	++S->EncountersStarted;
 
-	const HW::EBrainMode Mode = S->Tier == EHWTier::Hellwalker ? HW::EBrainMode::Hellwalker : HW::EBrainMode::Pathbreaker;
-	Encounter->Begin(&S->GetModel(), Mode, Seed, false);
-	Encounter->Brain.Config().RefSwingsPerMin = ReferenceSwingsPerMin;
+	// The tier picks the brain. Hellwalker is the RL keeper when its weights are present; without them it plays the
+	// script (the optional-asset pattern) and says so. The memory (what the keepers keep about you) is the session's.
+	ScriptBrain.SetScriptIndex(BossScript);
+	HW::IBossBrain* Brain = &ScriptBrain;
+	if (S->Tier == EHWTier::Hellwalker)
 	{
-		// Which boss (open world shrines): its own script, its own health. The model is shared — it is YOU
-		// being read, whichever boss is reading.
-		const HW::FScriptSlot* Slots = nullptr;
-		const int32 N = HW::BossScript(BossScript, Slots);
-		Encounter->Brain.SetScript(Slots, N);
-		HW::ApplyScriptTuning(BossScript, Encounter->Brain.Config());
+		if (const HW::FRLPolicy* Policy = S->GetPolicy())
+		{
+			RLBrain.Bind(Policy, &S->GetMemory());
+			Brain = &RLBrain;
+		}
+		else
+		{
+			UE_LOG(LogHellwalkerRL, Warning, TEXT("Hellwalker tier without an RL model (%s): playing the script."), *S->GetPolicyStatus());
+		}
+	}
+	Encounter->Begin(Brain, Seed, false);
+	{
+		// Which boss (open world shrines): its own health (and, for Pathbreaker, its own script).
 		HW::FFighter& B = Encounter->Duel.Get(HW::ESide::Boss);
 		B.HealthMax *= BossHealthScale;
 		B.Health = B.HealthMax;
@@ -231,8 +235,8 @@ void UHWDuelSubsystem::ResetEncounter(int32 InSeed)
 	PlaceFighters();
 	State = EHWEncounterState::Running;
 	OpenTelemetry();
-	UE_LOG(LogHellwalkerRL, Log, TEXT("Encounter %d begins: %s, seed %d, model has seen %d symbols."),
-		S->EncountersStarted, *S->TierLabel(S->Tier), Seed, S->GetModel().SymbolsObserved());
+	UE_LOG(LogHellwalkerRL, Log, TEXT("Encounter %d begins: %s (%s), seed %d; the keepers have met you in %d fight(s) and remember %d exchange(s)."),
+		S->EncountersStarted, *S->TierLabel(S->Tier), UTF8_TO_TCHAR(Brain->Name()), Seed, S->GetMemory().FightsBegun, S->GetMemory().NumTokens);
 }
 
 void UHWDuelSubsystem::PlaceFighters()
@@ -437,7 +441,7 @@ void UHWDuelSubsystem::StepOneFrame()
 	HW::FEncounter& E = *Encounter;
 
 	// 1. The brain decides first: it cannot see anything the player presses on this frame.
-	if (E.ThinkBoss(FighterDistance()))
+	if (E.ThinkBoss(CurrentGeometry()))
 	{
 		DecisionLog.Insert(FString::Printf(TEXT("f%d %s"), E.Duel.Frame, *ToFString(E.LastDecision().Reason)), 0);
 		if (DecisionLog.Num() > 8) { DecisionLog.SetNum(8); }
@@ -567,7 +571,7 @@ void UHWDuelSubsystem::HandleEvents()
 	}
 
 	HW::FReadMeterEvent RM;
-	if (E.Brain.PopReadMeter(RM))
+	if (E.PopReadMeter(RM))
 	{
 		// Testimony, not telegraph: shown only AFTER a model-driven counter has landed (PLAN §2.4).
 		ReadMeter = RM;
@@ -588,6 +592,26 @@ FVector UHWDuelSubsystem::TargetDirection(HW::ESide From) const
 	FVector D = B->GetActorLocation() - A->GetActorLocation();
 	D.Z = 0.f;
 	return D.Normalize() ? D : A->GetActorForwardVector();
+}
+
+HW::FDuelGeometry UHWDuelSubsystem::CurrentGeometry() const
+{
+	HW::FDuelGeometry G;
+	G.bMirrorY = true; // Unreal's floor is left-handed; the RL keeper was trained on the simulator's
+	const AHWCharacterBase* A = PlayerFighter.Get();
+	const AHWCharacterBase* B = BossFighter.Get();
+	if (A == nullptr || B == nullptr)
+	{
+		G.PlayerX = 0.f; G.PlayerY = 0.f; G.BossX = 1000.f; G.BossY = 0.f;
+		return G;
+	}
+	const FVector P = A->GetActorLocation();
+	const FVector Q = B->GetActorLocation();
+	G.PlayerX = static_cast<float>(P.X);
+	G.PlayerY = static_cast<float>(P.Y);
+	G.BossX = static_cast<float>(Q.X);
+	G.BossY = static_cast<float>(Q.Y);
+	return G;
 }
 
 float UHWDuelSubsystem::FighterDistance() const
@@ -688,7 +712,8 @@ void UHWDuelSubsystem::FlushTelemetryRows()
 	char Line[1024];
 	for (const HW::FExchangeRow& R : RowScratch)
 	{
-		HW::FormatExchangeRow(R, RunId.Get(), Encounter->Brain.GetMode(), GetMeanFrameMs(), Line, sizeof(Line));
+		HW::FormatExchangeRow(R, RunId.Get(), Encounter->Brain() != nullptr ? Encounter->Brain()->Mode() : HW::EBrainMode::Pathbreaker,
+			GetMeanFrameMs(), Line, sizeof(Line));
 		Out += UTF8_TO_TCHAR(Line);
 		Out += LINE_TERMINATOR;
 		++TelemetryRows;
@@ -712,7 +737,7 @@ void UHWDuelSubsystem::CloseTelemetry()
 		// B4: per-tier move-selection frequencies alongside the HP / damage numbers.
 		const HW::FEncounterStats& St = Encounter->Stats;
 		FString Summary = FString::Printf(TEXT("# mode=%s frames=%d player_damage_taken=%.1f boss_damage_taken=%.1f swings_per_min=%.2f damage_per_min=%.2f counters=%d decisions=%d argmax_violations=%d mean_frame_ms=%.2f\n# move_selection"),
-			*ToFString(HW::BrainModeName(Encounter->Brain.GetMode())), St.Frames, St.PlayerDamageTaken, St.BossDamageTaken,
+			Encounter->Brain() != nullptr ? UTF8_TO_TCHAR(Encounter->Brain()->Name()) : TEXT("none"), St.Frames, St.PlayerDamageTaken, St.BossDamageTaken,
 			St.SwingsPerMin(), St.DamagePerMin(), St.CountersLanded, St.Decisions, St.ArgmaxViolations, MeanMs);
 		for (int32 M = 1; M < HW::NumMoves; ++M)
 		{

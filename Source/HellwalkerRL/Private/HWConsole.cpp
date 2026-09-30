@@ -88,13 +88,13 @@ namespace
 
 	FAutoConsoleCommandWithWorldAndArgs GHWResetModel(
 		TEXT("hw.ResetModel"),
-		TEXT("hw.ResetModel - forget everything the Warden has learned this session."),
+		TEXT("hw.ResetModel - forget everything the keepers have learned about you this session."),
 		FConsoleCommandWithWorldAndArgsDelegate::CreateLambda([](const TArray<FString>& Args, UWorld* World)
 		{
 			(void)Args;
 			if (UHWDuelSubsystem* D = DuelOf(World))
 			{
-				if (UHWSessionSubsystem* S = D->GetSession()) { S->ResetModel(); }
+				if (UHWSessionSubsystem* S = D->GetSession()) { S->ResetMemory(); }
 			}
 		}));
 

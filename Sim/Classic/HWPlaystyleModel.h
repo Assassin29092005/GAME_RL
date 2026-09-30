@@ -1,4 +1,4 @@
-// Hellwalker — engine-free core. The playstyle model (PLAN §2.2) — the heart of the project.
+// HellwalkerRL — CLASSIC (reference) brain, tools only. The playstyle model (PLAN §2.2) of the reference project.
 //
 // An interleaved variable-order Markov model over ONE symbol stream of player and boss
 // commitments. It predicts the player's next symbol from the last two symbols; "playstyle" is the
@@ -11,7 +11,7 @@
 
 #pragma once
 
-#include "HWTypes.h"
+#include "HWCore/HWTypes.h"
 
 namespace HW
 {

@@ -6,7 +6,8 @@
 //   3. new commitments are latched (facing, target-space ghoststep direction),
 //   4. FDuel steps — hit detection is a per-frame SWEEP of the attack's volume (§5.4), not an overlap event,
 //   5. events fan out to the model, the brain, telemetry (A2), presentation and delegates.
-// The rules themselves are HW::FEncounter — the exact code the B0 simulator validated.
+// The rules themselves are HW::FEncounter — the exact code the B0 simulator validated. The boss brain is the tier's:
+// Pathbreaker = HW::FScriptBrain (the script verbatim), Hellwalker = HW::FRLBrain (the RL keeper, RL.md §8).
 
 #pragma once
 
@@ -14,6 +15,8 @@
 #include "Subsystems/WorldSubsystem.h"
 #include "HWTypesUE.h"
 #include "HWCore/HWEncounter.h"
+#include "HWCore/HWRLBrain.h"
+#include "HWCore/HWScriptBrain.h"
 #include "HWCore/HWSim.h"
 #include "HWContactOracle.h"
 #include "HWDuelSubsystem.generated.h"
@@ -79,6 +82,10 @@ public:
 
 	// ---- views for presentation / HUD -------------------------------------------------------------
 	const HW::FEncounter* GetEncounter() const { return Encounter.Get(); }
+	/** The RL keeper when it is the one fighting (F3 overlay), else null. */
+	const HW::FRLBrain* GetRLBrain() const { return Encounter.IsValid() && Encounter->Brain() == &RLBrain ? &RLBrain : nullptr; }
+	/** Where the fighters stand, for the brain (simulator handedness via bMirrorY). */
+	HW::FDuelGeometry CurrentGeometry() const;
 	const HW::FFighter& GetFighterState(HW::ESide Side) const;
 	int32 GetDuelFrame() const;
 	/** Fraction of the next frame already elapsed — smooths procedural animation between frames. */
@@ -150,6 +157,8 @@ private:
 
 	TUniquePtr<FHWContactOracle> Oracle;
 	TUniquePtr<HW::FEncounter> Encounter;
+	HW::FScriptBrain ScriptBrain;
+	HW::FRLBrain RLBrain;
 	TUniquePtr<HW::FPlayerBot> Bot;
 	HW::FSimArena BotArena;
 

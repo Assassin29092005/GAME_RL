@@ -1,4 +1,4 @@
-// Hellwalker — the additive rim-glow material (built from code, skeletal-mesh capable). Parameter "Color".
+// HellwalkerRL — the code-built materials: the additive rim glow (skeletal-mesh capable, parameter "Color") and the ground.
 
 #pragma once
 
@@ -6,7 +6,7 @@
 
 class UMaterialInterface;
 
-/** Null outside editor builds. */
+/** The saved generated asset when present (packaged games), else built in the editor. Null only if neither. */
 UMaterialInterface* HWGlowMaterial();
 
 /**
@@ -15,3 +15,9 @@ UMaterialInterface* HWGlowMaterial();
  * vertex colour is the albedo (the generator's GroundColor), broken up by noise.
  */
 UMaterialInterface* HWTerrainMaterial(bool* bOutLayered = nullptr);
+
+#if WITH_EDITOR
+/** Tools\MakeMaps.bat: save the code-built materials as /Game/HellwalkerRL/Materials assets (packaged games cannot
+ *  compile shaders). Returns the number of failed saves. */
+int32 HWSaveGeneratedMaterials();
+#endif

@@ -1,5 +1,13 @@
 #include "HWBuild.h"
 
+#include "HWDressing.h"
+#if WITH_EDITOR
+#include "Materials/Material.h"
+#include "Misc/PackageName.h"
+#include "UObject/Package.h"
+#include "UObject/SavePackage.h"
+#endif
+
 #include "Components/StaticMeshComponent.h"
 #include "Engine/StaticMesh.h"
 #include "GameFramework/Actor.h"
@@ -96,8 +104,13 @@ void HWBuild::SurveyMeshes()
 			const FBox B = M->GetBoundingBox();
 			const FVector S = B.GetSize();
 			const int32 Tris = M->GetRenderData() != nullptr && M->GetRenderData()->LODResources.Num() > 0 ? M->GetRenderData()->LODResources[0].GetNumTriangles() : -1;
+#if WITH_EDITOR
+			const int32 Nanite = M->IsNaniteEnabled() ? 1 : 0;
+#else
+			const int32 Nanite = -1; // the survey is an editor tool; a cooked mesh does not say
+#endif
 			R += FString::Printf(TEXT("%-44s %6.0f x %6.0f x %6.0f | %6.0f | %5.0f %5.0f | %7d | %d\n"), *A.AssetName.ToString(), S.X, S.Y, S.Z,
-				-B.Min.Z, B.GetCenter().X, B.GetCenter().Y, Tris, M->IsNaniteEnabled() ? 1 : 0);
+				-B.Min.Z, B.GetCenter().X, B.GetCenter().Y, Tris, Nanite);
 		}
 	}
 	const FString Path = FPaths::ProjectSavedDir() / TEXT("HellwalkerRL") / TEXT("MeshSurvey.txt");
@@ -191,6 +204,44 @@ void HWBuild::EnsureInstancedUsage(UStaticMesh* Mesh)
 	(void)Mesh;
 #endif
 }
+
+#if WITH_EDITOR
+int32 HWBuild::SaveInstancedUsageForDressing()
+{
+	int32 Marked = 0;
+	int32 Failed = 0;
+	TSet<UMaterial*> Seen;
+	for (const FHWDressSet& Set : HWDressing::Sets())
+	{
+		for (const FString& Path : Set.Paths)
+		{
+			UStaticMesh* Mesh = OptionalMesh(*Path);
+			if (Mesh == nullptr) { continue; }
+			for (const FStaticMaterial& Slot : Mesh->GetStaticMaterials())
+			{
+				UMaterial* Base = Slot.MaterialInterface != nullptr ? Slot.MaterialInterface->GetMaterial() : nullptr;
+				if (Base == nullptr || Seen.Contains(Base)) { continue; }
+				Seen.Add(Base);
+				if (Base->GetUsageByFlag(MATUSAGE_InstancedStaticMeshes)) { continue; }
+				Base->SetUsageByFlag(MATUSAGE_InstancedStaticMeshes, true);
+				Base->PostEditChange();
+				UPackage* Package = Base->GetOutermost();
+				const FString File = FPackageName::LongPackageNameToFilename(Package->GetName(), FPackageName::GetAssetPackageExtension());
+				FSavePackageArgs Args;
+				Args.TopLevelFlags = RF_Public | RF_Standalone;
+				Args.SaveFlags = SAVE_NoError;
+				const bool bSaved = UPackage::SavePackage(Package, nullptr, *File, Args);
+				UE_LOG(LogHellwalkerRL, Display, TEXT("HWMakeMaps: instanced usage on %s (for %s): %s"), *Base->GetName(), *Mesh->GetName(),
+					bSaved ? TEXT("saved") : TEXT("FAILED"));
+				Marked += bSaved ? 1 : 0;
+				Failed += bSaved ? 0 : 1;
+			}
+		}
+	}
+	UE_LOG(LogHellwalkerRL, Display, TEXT("HWMakeMaps: %d dressing materials checked, %d newly marked for instancing."), Seen.Num(), Marked);
+	return Failed;
+}
+#endif
 
 UStaticMesh* HWBuild::OptionalPackageMesh(const TCHAR* Package)
 {

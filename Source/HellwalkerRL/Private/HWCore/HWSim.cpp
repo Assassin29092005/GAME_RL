@@ -1,4 +1,4 @@
-// Hellwalker — engine-free core. Headless arena, simulated players, encounter runner.
+// HellwalkerRL — engine-free core. Headless arena, simulated players, encounter runner.
 
 #include "HWCore/HWSim.h"
 
@@ -172,6 +172,7 @@ namespace HW
 		case EBotKind::Varied:        return "Varied";
 		case EBotKind::DodgerLeft:    return "DodgerLeft";
 		case EBotKind::RhythmParrier: return "RhythmParrier";
+		case EBotKind::Habit:         return "Habit";
 		default:                      return "?";
 		}
 	}
@@ -217,6 +218,19 @@ namespace HW
 		return P;
 	}
 
+	int32_t HabitClassOf(const FMoveData& M)
+	{
+		if (M.Owner != ESide::Boss || !M.IsAttack()) { return -1; }
+		switch (M.Symbol)
+		{
+		case ESym::BFast:   return 0;
+		case ESym::BHeavy:  return 1;
+		case ESym::BFeint:  return 2;
+		case ESym::BKiller: return 3;
+		default:            return -1;
+		}
+	}
+
 	void FPlayerBot::Reset(const FBotProfile& InProfile, int32_t Seed)
 	{
 		*this = FPlayerBot{};
@@ -241,7 +255,7 @@ namespace HW
 				FeintWariness *= 0.96f; // fades a little with every swing
 				SideFlip *= 0.97f;
 			}
-			if (E.Type != EDuelEvent::Outcome || E.Side != ESide::Boss || E.Outcome != EHitOutcome::Hit) { continue; }
+			if (E.Type != EDuelEvent::Outcome || E.Side != ESide::Boss || E.Outcome != EHitOutcome::Hit || !Prof.bAdapts) { continue; }
 			const FMoveData& M = Move(E.Move);
 			if (M.FakeImpactFrame >= 0)
 			{
@@ -264,7 +278,7 @@ namespace HW
 		bOutSawFeint = bFeint && Rng.Chance(Prof.FeintRead + FeintWariness);
 		if (Prof.Kind == EBotKind::Masher) { bOutSawFeint = false; }
 		const EResp Picked = ChooseResponseCore(M, bKiller, bSeesKiller);
-		if (Prof.Kind != EBotKind::Masher && SideFlip > 0.f && (Picked == EResp::StepL || Picked == EResp::StepR) && Rng.Chance(SideFlip))
+		if (Prof.Kind != EBotKind::Masher && Prof.bAdapts && SideFlip > 0.f && (Picked == EResp::StepL || Picked == EResp::StepR) && Rng.Chance(SideFlip))
 		{
 			return Picked == EResp::StepL ? EResp::StepR : EResp::StepL;
 		}
@@ -300,6 +314,28 @@ namespace HW
 			if (bKiller) { return bSeesKiller ? EResp::StepL : EResp::Block; }
 			if (M.Symbol == ESym::BHeavy) { return Rng.Chance(0.85f) ? EResp::StepL : EResp::Block; }
 			return Rng.Chance(0.85f) ? EResp::Parry : EResp::StepL; // Fast, Feint
+		}
+		case EBotKind::Habit:
+		{
+			static constexpr EResp Resp[FBotProfile::HabitResponses] = {
+				EResp::Parry, EResp::Block, EResp::StepL, EResp::StepR, EResp::StepB, EResp::StepF, EResp::Attack, EResp::None };
+			const int32_t C = HabitClassOf(M);
+			if (C < 0 || Rng.Chance(Prof.HabitNoise)) { return Resp[Rng.RandHelper(FBotProfile::HabitResponses)]; }
+			const float* Row = Prof.Habit[HabitPhase][C];
+			float Sum = 0.f;
+			for (int32_t I = 0; I < FBotProfile::HabitResponses; ++I) { Sum += Row[I] > 0.f ? Row[I] : 0.f; }
+			if (Sum <= 0.f) { return EResp::None; }
+			float R = Rng.FRand() * Sum;
+			EResp Picked = EResp::None;
+			for (int32_t I = 0; I < FBotProfile::HabitResponses; ++I)
+			{
+				const float W = Row[I] > 0.f ? Row[I] : 0.f;
+				if (R < W) { Picked = Resp[I]; break; }
+				R -= W;
+			}
+			// Seeing the killer's red mark overrides a block / parry habit: those cannot stop it.
+			if (bSeesKiller && (Picked == EResp::Block || Picked == EResp::Parry)) { return EResp::StepB; }
+			return Picked;
 		}
 		case EBotKind::Varied:
 		default:
@@ -454,21 +490,11 @@ namespace HW
 	// Runner
 	// ----------------------------------------------------------------------------------------------
 
-	FEncounterStats RunEncounter(FPlaystyleModel& Model, const FRunConfig& Cfg,
-		std::vector<FExchangeRow>* OutRows, std::vector<FSymbolRecord>* OutSymbols)
+	FEncounterStats RunEncounter(IBossBrain& Brain, const FRunConfig& Cfg, std::vector<FExchangeRow>* OutRows)
 	{
 		FEncounter Enc;
-		if (Cfg.BrainConfig != nullptr) { Enc.Brain.Config() = *Cfg.BrainConfig; }
 		Enc.bRecordRows = OutRows != nullptr;
-		Enc.bRecordSymbols = OutSymbols != nullptr;
-		Enc.Begin(&Model, Cfg.Mode, Cfg.Seed, Cfg.bImmortal);
-		if (Cfg.Script != 0)
-		{
-			const FScriptSlot* Slots = nullptr;
-			const int32_t N = BossScript(Cfg.Script, Slots);
-			Enc.Brain.SetScript(Slots, N);
-			ApplyScriptTuning(Cfg.Script, Enc.Brain.Config());
-		}
+		Enc.Begin(&Brain, Cfg.Seed, Cfg.bImmortal);
 
 		FSimArena Arena;
 		Arena.Reset(Cfg.StartDistance);
@@ -478,7 +504,7 @@ namespace HW
 		std::vector<FExchangeRow> Rows;
 		for (int32_t F = 0; F < Cfg.MaxFrames; ++F)
 		{
-			Enc.ThinkBoss(Arena.Distance());
+			Enc.ThinkBoss(Arena.Geometry());
 			float PFwd = 0.f;
 			float PLat = 0.f;
 			Bot.Act(Enc.Duel, Arena, PFwd, PLat);
@@ -493,10 +519,6 @@ namespace HW
 				OutRows->insert(OutRows->end(), Rows.begin(), Rows.end());
 			}
 			if (Enc.IsOver()) { break; }
-		}
-		if (OutSymbols != nullptr)
-		{
-			OutSymbols->insert(OutSymbols->end(), Enc.SymbolLog().begin(), Enc.SymbolLog().end());
 		}
 		return Enc.Stats;
 	}

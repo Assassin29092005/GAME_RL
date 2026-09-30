@@ -1,28 +1,22 @@
-// Hellwalker — engine-free core. The boss brain (PLAN §2.4, B1, B3).
+// HellwalkerRL — CLASSIC (reference) brain, tools only. NOT compiled into the game.
 //
-// The SCRIPT owns whether and when the boss acts. The model only decides WHICH action fills a slot.
-// One brain, one flag (Pathbreaker = scripted control arm, Hellwalker = adaptive) — never two
-// separately authored brains (B1). Plain C++ scoring so every candidate score is inspectable (C3).
+// This is the reference Hellwalker project's boss brain, kept verbatim as the BENCHMARK the RL keeper is measured
+// against (RL.md §7: "classic vs RL", "the same margin the classic brain achieves"). Opponent modelling + a best
+// response: a variable-order Markov model counts the player's answers (FPlaystyleModel), a payoff table measured
+// through FDuel scores every boss move against every answer (FPayoffTable), and the brain substitutes the best
+// counter into its script when it beats the scripted move by a margin that shrinks with certainty.
+//
+// The SCRIPT owns whether and when the boss acts; the model only decides WHICH action fills a slot. One brain,
+// one flag (Pathbreaker / Hellwalker) — in the tools, the game's FScriptBrain plays the Pathbreaker arm.
 
 #pragma once
 
-#include "HWDuel.h"
-#include "HWPlaystyleModel.h"
-#include "HWRandom.h"
+#include "HWCore/HWBrain.h"
+#include "HWCore/HWRandom.h"
+#include "Classic/HWPlaystyleModel.h"
 
 namespace HW
 {
-	/** Pathbreaker = the fixed-pattern control arm. Hellwalker = reads you, adapts, counterattacks. */
-	enum class EBrainMode : uint8_t { Pathbreaker, Hellwalker };
-	const char* BrainModeName(EBrainMode M);
-
-	struct FScriptSlot
-	{
-		ESlotType Type = ESlotType::Attack;
-		EMoveId   Move = EMoveId::None;
-		bool      bChain = false;   // continues the previous attack string at its cancel frame
-	};
-
 	struct FBrainConfig
 	{
 		// §2.4 step 3: Margin = lerp(MarginHigh, MarginLow, clamp(Read / ReadForMinMargin, 0, 1))
@@ -53,7 +47,6 @@ namespace HW
 
 		bool bLuckyDraw = true;
 		// Payoffs measured from the combat rules (HWPayoffTable) instead of the hand-authored matrix.
-		// The authored matrix is kept for comparison (B0 ablation) and as documentation of intent.
 		bool bDerivedPayoffs = true;
 		// Animation reading, not input reading: a player swing counts as "seen" only once it has been
 		// winding up this many frames (~100 ms). Earlier than that, the boss cannot have reacted to it.
@@ -61,62 +54,58 @@ namespace HW
 		float InRangeFactor = 0.9f;       // attack is feasible when Distance <= Range * this
 	};
 
-	struct FCandidateScore
-	{
-		EMoveId Move = EMoveId::None;
-		float   Expected = 0.f;       // E[payoff] under the prediction for this candidate's boss symbol
-		float   Score = 0.f;          // per-frame normalised (+ pressure bias)
-		float   Decision = 0.f;       // Score - Margin for non-scripted candidates; argmax is chosen
-	};
+	/**
+	 * Per-script brain tuning, applied wherever a script is set. The Sage's script repositions a lot, so its floor
+	 * controller aims further above the shadow script's swing rate (B0). Every value is set explicitly.
+	 */
+	void ApplyScriptTuning(int32_t Index, FBrainConfig& Cfg);
 
-	enum class EDecisionKind : uint8_t { Script, Substitution, LuckyDrawPress, LuckyDrawAbort, PerfectPunish, Spacing, CapForcedScript };
-	const char* DecisionKindName(EDecisionKind K);
-
-	struct FBrainDecision
+	struct FSymbolRecord
 	{
-		int32_t        Frame = 0;
-		int32_t        ScriptIndex = 0;
-		ESlotType      Slot = ESlotType::Attack;
-		bool           bChain = false;
-		EMoveId        Scripted = EMoveId::None;
-		EMoveId        Chosen = EMoveId::None;
-		EDecisionKind  Kind = EDecisionKind::Script;
-		EHitOutcome    PrevOutcome = EHitOutcome::None;
-		int32_t        FrameAdvantage = 0;
-		float          ReadBits = 0.f;
-		float          Margin = 0.f;
-		float          PressureBias = 0.f;
-		float          FloorCorrection = 0.f; // the correction term applied at this decision (A2 CSV)
-		ESym           Predicted = ESym::Neutral;
-		float          PredictedP = 0.f;
-		ESym           Ctx0 = ESym::Count;
-		ESym           Ctx1 = ESym::Count;
-		FCandidateScore Top[3];
-		int32_t        NumTop = 0;
-		bool           bArgmaxHolds = true;   // C3: chosen == argmax(Decision) on every decision
-		char           Reason[192] = {};
-	};
-
-	/** Shown ~0.4 s immediately AFTER a model-driven counter lands. Testimony, not telegraph. */
-	struct FReadMeterEvent
-	{
+		ESym    Sym = ESym::Neutral;
 		int32_t Frame = 0;
-		ESym    Predicted = ESym::Neutral;
-		float   Confidence = 0.f;
-		EMoveId Counter = EMoveId::None;
+		int32_t Lead = FPlaystyleModel::NoTiming;
 	};
 
-	class FBossBrain
+	/**
+	 * The classic brain's eyes (PLAN §2.1 cadence): a symbol at every commitment event, a movement symbol when a boss
+	 * damage window resolves with no player commitment, and a 45-frame watchdog. Feeds the playstyle model.
+	 */
+	class FSymbolObserver
 	{
 	public:
-		FBossBrain();
+		static constexpr int32_t WatchdogFrames = 45;
+		/** Timing samples only when the impact the player timed to lands at least this far after the boss commits. */
+		static constexpr int32_t TimingHorizonFrames = 18;
 
-		/** Per-encounter reset — ResetEncounter(). The model is NOT owned: it persists across encounters. */
+		void Reset();
+		void ProcessFrame(const std::vector<FDuelEvent>& Events, const FDuel& Duel, ESym PlayerMovement,
+			FPlaystyleModel* Model, std::vector<FSymbolRecord>* OutLog);
+		int32_t Emitted() const { return NumEmitted; }
+
+	private:
+		void Emit(ESym S, int32_t Frame, int32_t Lead, FPlaystyleModel* Model, std::vector<FSymbolRecord>* OutLog,
+			int32_t Bit = FPlaystyleModel::NoBait);
+
+		int32_t LastEmitFrame = 0;
+		int32_t LastBossCommitFrame = -1;
+		EMoveId PendingBossMove = EMoveId::None;
+		bool    bBossSwingPending = false;
+		bool    bPlayerCommittedSinceBossSwing = false;
+		int32_t NumEmitted = 0;
+	};
+
+	class FClassicBrain : public IBossBrain
+	{
+	public:
+		FClassicBrain();
+
+		/** Full reset of per-encounter state (the model is NOT owned: it persists across encounters). */
 		void Reset(int32_t Seed);
 		void BindModel(FPlaystyleModel* InModel) { Model = InModel; }
-		void SetMode(EBrainMode InMode) { Mode = InMode; }
-		EBrainMode GetMode() const { return Mode; }
-		bool IsAdaptive() const { return Mode == EBrainMode::Hellwalker; }
+		void SetMode(EBrainMode InMode) { BrainMode = InMode; }
+		EBrainMode GetMode() const { return BrainMode; }
+		bool IsAdaptive() const { return BrainMode == EBrainMode::Hellwalker; }
 		FBrainConfig& Config() { return Cfg; }
 		const FBrainConfig& Config() const { return Cfg; }
 
@@ -124,35 +113,40 @@ namespace HW
 		int32_t ScriptLength() const { return ScriptLen; }
 		const FScriptSlot& ScriptAt(int32_t I) const { return Script[I % ScriptLen]; }
 
-		/**
-		 * Called once per frame BEFORE FDuel::Step. Commits at most one boss move on the duel.
-		 * Distance: centre-to-centre, cm. Returns true if a decision record was produced.
-		 */
-		bool Think(FDuel& Duel, float Distance, FBrainDecision* OutDecision);
+		/** Record the observer's symbol stream (tests / CSV). */
+		bool bRecordSymbols = false;
+		std::vector<FSymbolRecord>& SymbolLog() { return Symbols; }
 
-		/** Feed every duel event after each step. */
+		// IBossBrain
+		EBrainMode Mode() const override { return BrainMode; }
+		const char* Name() const override { return BrainMode == EBrainMode::Hellwalker ? "Hellwalker (classic)" : "Pathbreaker (classic)"; }
+		void BeginEncounter(int32_t Seed) override;
+		bool Think(FDuel& Duel, const FDuelGeometry& Geo, FBrainDecision* OutDecision) override;
+		void OnFrame(const std::vector<FDuelEvent>& Events, const FDuel& Duel, const FDuelGeometry& Geo, ESym PlayerMovement) override;
+		bool PopReadMeter(FReadMeterEvent& Out) override;
+		const FBrainDecision& LastDecision() const override { return Last; }
+		int32_t Decisions() const override { return DecisionCount; }
+		int32_t CountersLanded() const override { return CounterHits; }
+		int32_t Substitutions() const override { return SubCount; }
+		float GetPressureBias() const override { return PressureBias; }
+		int32_t ShadowSwingDeficit() const override { return ShadowScriptedSwings - ShadowChosenSwings; }
+		float ShadowScriptRate(int32_t Frame) const override;
+		int32_t SymbolsObserved() const override { return Observer.Emitted(); }
+
+		/** Called once per frame BEFORE FDuel::Step (the reference API). Distance: centre-to-centre, cm. */
+		bool ThinkAt(FDuel& Duel, float Distance, FBrainDecision* OutDecision);
+		/** Feed one duel event (OnFrame does this for every event, then runs the observer). */
 		void OnEvent(const FDuelEvent& E, const FDuel& Duel);
 
 		/** The pure decision function (B1/B3 automation targets it directly). */
 		FBrainDecision Decide(const FDuel& Duel, const FScriptSlot& InSlot, int32_t InScriptIndex, EHitOutcome InPrevOutcome,
 			bool bInOwnDefence, float Distance) const;
 
-		// Read Meter
-		bool PopReadMeter(FReadMeterEvent& Out);
-
 		// Telemetry (A2) — also the floor controller's measurement.
 		float SwingsPerMin(int32_t Frame) const;
 		float DamagePerMin(int32_t Frame) const;
 		int32_t Swings() const { return SwingCount; }
 		float DamageDealt() const { return DamageTotal; }
-		float GetPressureBias() const { return PressureBias; }
-		int32_t ShadowSwingDeficit() const { return ShadowScriptedSwings - ShadowChosenSwings; }
-		/** The floor controller's matched-player reference: the script's swing rate in this fight's slots (swings/min). */
-		float ShadowScriptRate(int32_t Frame) const;
-		int32_t Substitutions() const { return SubCount; }
-		int32_t Decisions() const { return DecisionCount; }
-		int32_t CountersLanded() const { return CounterHits; }
-		const FBrainDecision& LastDecision() const { return Last; }
 
 		/** Authored payoff for a boss move vs a predicted player symbol, in [-3, 3], before timing. */
 		static float BasePayoff(EMoveId BossMove, ESym PlayerSym);
@@ -173,10 +167,13 @@ namespace HW
 		bool CapReached() const;
 
 		FPlaystyleModel* Model = nullptr;
-		EBrainMode Mode = EBrainMode::Pathbreaker;
+		EBrainMode BrainMode = EBrainMode::Hellwalker;
 		FBrainConfig Cfg;
 		mutable FRandom Rng;   // tie-breaks only — the ONLY randomness in the brain
 		float LastFloorCorrection = 0.f;
+
+		FSymbolObserver Observer;
+		std::vector<FSymbolRecord> Symbols;
 
 		static constexpr int32_t MaxScript = 64;
 		FScriptSlot Script[MaxScript];
@@ -221,18 +218,4 @@ namespace HW
 
 		FBrainDecision Last;
 	};
-
-	/** The default boss script: "The Ninefold Warden". Pathbreaker plays it verbatim. */
-	int32_t DefaultWardenScript(const FScriptSlot*& OutSlots);
-
-	/** Boss scripts by index: 0 the Ninefold Warden, 1 the Monkey Sage. */
-	int32_t BossScript(int32_t Index, const FScriptSlot*& OutSlots);
-	inline constexpr int32_t NumBossScripts = 2;
-
-	/**
-	 * Per-script brain tuning, applied wherever a script is set (the simulator and the game alike). The Sage's
-	 * script repositions a lot, so its floor controller aims further above the shadow script's swing rate (B0).
-	 * Every value is set explicitly, so switching back to the Warden restores the defaults.
-	 */
-	void ApplyScriptTuning(int32_t Index, FBrainConfig& Cfg);
 }

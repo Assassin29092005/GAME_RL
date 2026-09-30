@@ -54,6 +54,14 @@ namespace HWBuild
 	 * flag (it draws the default material). Editor builds: set it and recompile in memory (never saved).
 	 */
 	void EnsureInstancedUsage(UStaticMesh* Mesh);
+#if WITH_EDITOR
+	/**
+	 * Tools\MakeMaps.bat: set (and SAVE) the instanced-static-mesh usage on the base materials of every dressing mesh.
+	 * EnsureInstancedUsage does it at play time in the editor; a packaged game cannot compile shaders, so the cooked
+	 * materials must already carry the flag. Returns the number of material packages that failed to save.
+	 */
+	int32 SaveInstancedUsageForDressing();
+#endif
 	/** Same, from a package path ("/Game/.../SM_X": the object is the package's base name). */
 	UStaticMesh* OptionalPackageMesh(const TCHAR* Package);
 

@@ -1,10 +1,11 @@
-// Hellwalker — engine-free core. Headless simulation: a 2-D arena, simulated player profiles, and an
+// HellwalkerRL — engine-free core. Headless simulation: a 2-D arena, simulated player profiles, and an
 // encounter runner. B0's thesis simulator is built on this, and so are the Unreal automation tests,
 // so "the thesis holds" is checked against exactly the rules the game ships with.
 
 #pragma once
 
 #include "HWEncounter.h"
+#include "HWRandom.h"
 
 namespace HW
 {
@@ -25,6 +26,8 @@ namespace HW
 
 		void Reset(float StartDistance);
 		float Distance() const;
+		/** Where both fighters stand (what a brain may look at). */
+		FDuelGeometry Geometry() const { return FDuelGeometry{ Pos[0].X, Pos[0].Y, Pos[1].X, Pos[1].Y }; }
 		/** Unit vector from Side toward its opponent (lock-on is always on in the sim). */
 		FVec2 FacingOf(ESide Side) const;
 		/** Latch commit facing / step direction for moves committed on the current frame (before Step). */
@@ -44,7 +47,10 @@ namespace HW
 		bool PreGuard[2] = { false, false };
 	};
 
-	enum class EBotKind : uint8_t { Masher, Turtle, Habitual, Varied, DodgerLeft, RhythmParrier };
+	/** The reference bots (B0's instrument), plus Habit: a procedurally generated habit player (RL.md §6, the RL keeper's
+	 *  training population) that answers every boss swing from a response table. */
+	enum class EBotKind : uint8_t { Masher, Turtle, Habitual, Varied, DodgerLeft, RhythmParrier, Habit };
+	inline constexpr int32_t NumReferenceBotKinds = 6;
 	const char* BotKindName(EBotKind K);
 
 	/** A simulated player. Skill in [0, 1] scales reaction, timing noise, reads and punish rate. */
@@ -65,8 +71,17 @@ namespace HW
 		float    HeavyRate = 0.2f;
 		float    SwitchRate = 0.f;
 		float    PreferredRange = 170.f;
+
+		// ---- Kind == Habit only (RL.md §6): a response table per boss swing class, two tables for habit switches.
+		static constexpr int32_t HabitClasses = 4;    // the boss swing's symbol: BFast, BHeavy, BFeint, BKiller
+		static constexpr int32_t HabitResponses = 8;  // Parry, Block, StepL, StepR, StepB, StepF, Attack, None
+		float    Habit[2][HabitClasses][HabitResponses] = {}; // [table A / B][class][response] weights (need not sum to 1)
+		float    HabitNoise = 0.f;    // P(a uniformly random response instead of the table)
+		bool     bAdapts = true;      // the reference bots' wariness (warier of feints once caught, dodges flip side)
 	};
 	FBotProfile MakeBotProfile(EBotKind Kind, float Skill);
+	/** Habit class of a boss swing (its symbol): 0 BFast, 1 BHeavy, 2 BFeint, 3 BKiller; -1 not a boss attack. */
+	int32_t HabitClassOf(const FMoveData& M);
 
 	class FPlayerBot
 	{
@@ -82,6 +97,9 @@ namespace HW
 		void OnEvents(const std::vector<FDuelEvent>& Events, const FDuel& Duel);
 		ESym MovementSym() const;
 		const FBotProfile& Profile() const { return Prof; }
+		/** Habit players: which table answers (0 = A, 1 = B after a habit switch). The owner schedules switches. */
+		void SetHabitPhase(int32_t Phase) { HabitPhase = Phase > 0 ? 1 : 0; }
+		int32_t GetHabitPhase() const { return HabitPhase; }
 
 	private:
 		enum class EResp : uint8_t { None, Parry, Block, StepL, StepR, StepB, StepF, Attack };
@@ -106,21 +124,21 @@ namespace HW
 		int32_t PunishedWindowFrame = -1;
 		float   Fwd = 0.f;
 		float   Lat = 0.f;
+		int32_t HabitPhase = 0;
 	};
 
 	struct FRunConfig
 	{
-		EBrainMode  Mode = EBrainMode::Pathbreaker;
 		FBotProfile Bot;
 		int32_t     Seed = 1;
 		int32_t     MaxFrames = 90 * FramesPerSecond;
 		bool        bImmortal = false;
 		float       StartDistance = 650.f;
-		const FBrainConfig* BrainConfig = nullptr;
-		int32_t     Script = 0;          // HW::BossScript index (0 the Warden, 1 the Monkey Sage)
 	};
 
-	/** Run one encounter on a (session-persistent) model. Optional logs. */
-	FEncounterStats RunEncounter(FPlaystyleModel& Model, const FRunConfig& Cfg,
-		std::vector<FExchangeRow>* OutRows = nullptr, std::vector<FSymbolRecord>* OutSymbols = nullptr);
+	/**
+	 * Run one encounter of Brain against a simulated player. The brain is configured by the caller (script, session
+	 * memory); only its per-fight state is reset here, so a session is several calls on the same brain.
+	 */
+	FEncounterStats RunEncounter(IBossBrain& Brain, const FRunConfig& Cfg, std::vector<FExchangeRow>* OutRows = nullptr);
 }

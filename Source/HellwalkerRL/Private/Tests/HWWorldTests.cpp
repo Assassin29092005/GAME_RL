@@ -12,7 +12,7 @@
 
 #include "HWAnimTypes.h"
 #include "HWWorldGen.h"
-#include "HWCore/HWBossBrain.h"
+#include "HWCore/HWBrain.h"
 
 namespace
 {
@@ -170,7 +170,6 @@ bool FHWWorldShrinesTest::RunTest(const FString& Parameters)
 	return !HasAnyErrors();
 }
 
-#endif
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FHWWorldGroundLayersTest, "Project.HellwalkerRL.World.GroundLayers", HWWorldTestFlags)
 
@@ -211,3 +210,5 @@ bool FHWWorldGroundLayersTest::RunTest(const FString& Parameters)
 	}
 	return !HasAnyErrors();
 }
+
+#endif // WITH_DEV_AUTOMATION_TESTS

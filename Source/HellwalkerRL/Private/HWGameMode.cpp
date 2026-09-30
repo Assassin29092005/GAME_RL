@@ -10,7 +10,6 @@
 #include "HWPlayerCharacter.h"
 #include "HWPlayerController.h"
 #include "HWSessionSubsystem.h"
-#include "HWCore/HWPayoffTable.h"
 #include "Engine/World.h"
 #include "GameFramework/PlayerController.h"
 #include "Kismet/GameplayStatics.h"
@@ -46,9 +45,8 @@ void AHWGameMode::InitGame(const FString& MapName, const FString& Options, FStri
 	Super::InitGame(MapName, Options, ErrorMessage);
 	if (CombatConfig != nullptr)
 	{
-		CombatConfig->ApplyToCore(); // also rebuilds the derived payoff table
+		CombatConfig->ApplyToCore();
 	}
-	HW::DerivedPayoffs(); // measure the payoff matrix now, not on the first decision
 	if (FParse::Param(FCommandLine::Get(), TEXT("HWAnimSurvey")))
 	{
 		for (const FName& Cast : HWCastNames()) { UHWAnimSet::Survey(Cast); } // C2: choose clips from data

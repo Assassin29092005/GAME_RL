@@ -60,3 +60,9 @@ __pycache__/
 Build/Packaged/
 
 content_copy.log
+
+# RL harness build output (RL/native/build_harness.bat)
+RL/native/out_harness/
+
+# Cooker by-products (Tools\Package.bat)
+Build/Windows/FileOpenOrder/

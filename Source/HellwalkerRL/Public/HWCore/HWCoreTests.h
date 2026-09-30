@@ -22,4 +22,7 @@ namespace HW
 
 	/** All core tests, in plan order. */
 	int32_t GetCoreTests(const FCoreTest*& OutTests);
+
+	/** The RL keeper's core tests ("RL.*": action space, masks, perception, tokens, labels, policy, brain, session). */
+	int32_t GetRLTests(const FCoreTest*& OutTests);
 }

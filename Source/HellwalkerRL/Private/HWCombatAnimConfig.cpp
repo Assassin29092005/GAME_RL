@@ -3,7 +3,6 @@
 #include "HellwalkerRL.h"
 #include "HWTypesUE.h"
 #include "HWCore/HWMoves.h"
-#include "HWCore/HWPayoffTable.h"
 
 UHWCombatAnimConfig::UHWCombatAnimConfig()
 {
@@ -96,7 +95,6 @@ int32 UHWCombatAnimConfig::ApplyToCore() const
 			break;
 		}
 	}
-	HW::RebuildDerivedPayoffs();
-	UE_LOG(LogHellwalkerRL, Log, TEXT("Combat config %s applied: %d moves; payoff matrix re-measured."), *GetName(), Applied);
+	UE_LOG(LogHellwalkerRL, Log, TEXT("Combat config %s applied: %d moves."), *GetName(), Applied);
 	return Applied;
 }

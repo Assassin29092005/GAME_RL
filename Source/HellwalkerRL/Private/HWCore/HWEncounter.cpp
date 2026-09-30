@@ -1,4 +1,4 @@
-// Hellwalker — engine-free core.
+// HellwalkerRL — engine-free core. Encounter, telemetry rows.
 
 #include "HWCore/HWEncounter.h"
 
@@ -6,93 +6,6 @@
 
 namespace HW
 {
-	// ----------------------------------------------------------------------------------------------
-	// Symbol observer — PLAN §2.1 cadence
-	// ----------------------------------------------------------------------------------------------
-
-	void FSymbolObserver::Reset()
-	{
-		LastEmitFrame = 0;
-		LastBossCommitFrame = -1;
-		PendingBossMove = EMoveId::None;
-		bBossSwingPending = false;
-		bPlayerCommittedSinceBossSwing = false;
-		NumEmitted = 0;
-	}
-
-	void FSymbolObserver::Emit(ESym S, int32_t Frame, int32_t Lead, FPlaystyleModel* Model, std::vector<FSymbolRecord>* OutLog, int32_t Bit)
-	{
-		if (Model != nullptr) { Model->Observe(S, Lead, Bit); }
-		if (OutLog != nullptr) { OutLog->push_back(FSymbolRecord{ S, Frame, Lead }); }
-		LastEmitFrame = Frame;
-		++NumEmitted;
-	}
-
-	void FSymbolObserver::ProcessFrame(const std::vector<FDuelEvent>& Events, const FDuel& Duel, ESym PlayerMovement,
-		FPlaystyleModel* Model, std::vector<FSymbolRecord>* OutLog)
-	{
-		const FFighter& P = Duel.Get(ESide::Player);
-		for (const FDuelEvent& E : Events)
-		{
-			if (E.Type == EDuelEvent::Commit)
-			{
-				if (E.Side == ESide::Player)
-				{
-					// Timing sample (the "when"): frames BEFORE the impact this press was timed to.
-					int32_t Lead = FPlaystyleModel::NoTiming;
-					int32_t Bit = FPlaystyleModel::NoBait;
-					if (bBossSwingPending && !bPlayerCommittedSinceBossSwing && PendingBossMove != EMoveId::None)
-					{
-						const FMoveData& BM = Move(PendingBossMove);
-						const int32_t Press = E.Frame - LastBossCommitFrame; // on the boss move's own timeline
-						int32_t Anchor = BM.Startup;
-						if (BM.FakeImpactFrame >= 0)
-						{
-							// A bait shows one impact and delivers another. A press nearer the bait than the real
-							// strike was timed to the bait (it bit); a later one waited for the real strike (it read
-							// the bait). Either way the lead is measured to the impact the player was timing — so a
-							// player who has learned to wait does not read as one who "presses 10 frames late".
-							Bit = Press * 2 < BM.FakeImpactFrame + BM.Startup ? 1 : 0;
-							Anchor = Bit == 1 ? BM.FakeImpactFrame : BM.Startup;
-						}
-						if (Anchor >= TimingHorizonFrames) { Lead = Anchor - Press; }
-					}
-					Emit(E.Sym, E.Frame, Lead, Model, OutLog, Bit);
-					bPlayerCommittedSinceBossSwing = true;
-				}
-				else
-				{
-					Emit(E.Sym, E.Frame, FPlaystyleModel::NoTiming, Model, OutLog);
-					LastBossCommitFrame = E.Frame;
-					if (Move(E.Move).IsAttack())
-					{
-						bBossSwingPending = true;
-						bPlayerCommittedSinceBossSwing = false;
-						PendingBossMove = E.Move;
-					}
-				}
-			}
-			else if (E.Type == EDuelEvent::Outcome && E.Side == ESide::Boss && bBossSwingPending)
-			{
-				// A boss damage window resolved. No player commitment during it -> a movement symbol
-				// (or Block: holding guard through it IS the commitment).
-				bBossSwingPending = false;
-				PendingBossMove = EMoveId::None;
-				if (!bPlayerCommittedSinceBossSwing)
-				{
-					Emit(P.IsGuarding() || P.bGuardHeld ? ESym::Block : PlayerMovement, E.Frame, FPlaystyleModel::NoTiming, Model, OutLog);
-				}
-			}
-		}
-
-		// Watchdog — a turtling player still generates data.
-		const int32_t Now = Duel.Frame;
-		if (Now - LastEmitFrame >= WatchdogFrames)
-		{
-			Emit(P.bGuardHeld ? ESym::Block : PlayerMovement, Now, FPlaystyleModel::NoTiming, Model, OutLog);
-		}
-	}
-
 	// ----------------------------------------------------------------------------------------------
 	// CSV (A2)
 	// ----------------------------------------------------------------------------------------------
@@ -128,32 +41,35 @@ namespace HW
 	// Encounter
 	// ----------------------------------------------------------------------------------------------
 
-	void FEncounter::Begin(FPlaystyleModel* SessionModel, EBrainMode Mode, int32_t Seed, bool bInImmortal)
+	void FEncounter::Begin(IBossBrain* InBrain, int32_t Seed, bool bInImmortal)
 	{
-		Model = SessionModel;
+		BossBrain = InBrain;
 		bImmortal = bInImmortal;
 		Duel.Reset();
 		if (bImmortal)
 		{
 			for (FFighter& F : Duel.Fighters) { F.Health = F.HealthMax = 1.0e9f; }
 		}
-		Observer.Reset();
-		Brain.Reset(Seed);
-		Brain.BindModel(SessionModel);
-		Brain.SetMode(Mode);
-		if (Model != nullptr) { Model->Flush(); }
+		if (BossBrain != nullptr) { BossBrain->BeginEncounter(Seed); }
 		Stats = FEncounterStats{};
 		LastBossMove = EMoveId::None;
+		Geometry = FDuelGeometry{};
 		Events.clear();
-		Symbols.clear();
 		Rows.clear();
 		bRowOpen = false;
 	}
 
-	bool FEncounter::ThinkBoss(float Distance)
+	const FBrainDecision& FEncounter::LastDecision() const
 	{
+		static const FBrainDecision None;
+		return BossBrain != nullptr ? BossBrain->LastDecision() : None;
+	}
+
+	bool FEncounter::ThinkBoss(const FDuelGeometry& Geo)
+	{
+		Geometry = Geo;
 		FBrainDecision D;
-		if (!Brain.Think(Duel, Distance, &D)) { return false; }
+		if (BossBrain == nullptr || !BossBrain->Think(Duel, Geo, &D)) { return false; }
 		++Stats.Decisions;
 		++Stats.DecisionKinds[static_cast<int32_t>(D.Kind)];
 		if (D.ScriptIndex >= 0 && D.ScriptIndex < FEncounterStats::MaxSlots)
@@ -184,8 +100,9 @@ namespace HW
 		if (!bRowOpen) { return; }
 		OpenExchange.PlayerHealth = Duel.Get(ESide::Player).Health;
 		OpenExchange.BossHealth = Duel.Get(ESide::Boss).Health;
-		OpenExchange.SwingsPerMin = Brain.SwingsPerMin(Duel.Frame);
-		OpenExchange.DamagePerMin = Brain.DamagePerMin(Duel.Frame);
+		const float Minutes = static_cast<float>(Duel.Frame > 0 ? Duel.Frame : 1) / (60.f * FramesPerSecond);
+		OpenExchange.SwingsPerMin = static_cast<float>(Stats.BossSwings) / Minutes;
+		OpenExchange.DamagePerMin = Stats.PlayerDamageTaken / Minutes;
 		Rows.push_back(OpenExchange);
 		bRowOpen = false;
 	}
@@ -197,9 +114,10 @@ namespace HW
 		Stats.Frames = Duel.Frame;
 		if (Duel.Get(ESide::Boss).State == EFighterState::GuardBroken) { ++Stats.BossExposedFrames; }
 
+		const int32_t BrainDecisions = BossBrain != nullptr ? BossBrain->Decisions() : 0;
+		const FBrainDecision& Ld = LastDecision();
 		for (const FDuelEvent& E : Events)
 		{
-			Brain.OnEvent(E, Duel);
 			switch (E.Type)
 			{
 			case EDuelEvent::Commit:
@@ -222,9 +140,8 @@ namespace HW
 					++Stats.BossOutcomes[static_cast<int32_t>(E.Outcome)];
 					++Stats.BossOutcomeByMove[static_cast<int32_t>(E.Move)][static_cast<int32_t>(E.Outcome)];
 					Stats.PlayerDamageTaken += E.Damage;
-					if (Brain.Decisions() > 0)
+					if (BrainDecisions > 0)
 					{
-						const FBrainDecision& Ld = Brain.LastDecision();
 						if (Ld.ScriptIndex >= 0 && Ld.ScriptIndex < FEncounterStats::MaxSlots) { Stats.PlayerDamageBySlot[Ld.ScriptIndex] += E.Damage; }
 						Stats.PlayerDamageByKind[static_cast<int32_t>(Ld.Kind)] += E.Damage;
 					}
@@ -242,9 +159,8 @@ namespace HW
 					Stats.BossDamageTaken += E.Damage;
 					Stats.BossDamageByPhase[E.DefenderPhase < static_cast<uint8_t>(EDefenderPhase::Count) ? E.DefenderPhase : 0] += E.Damage;
 					Stats.BossDamageAfterMove[static_cast<int32_t>(LastBossMove)] += E.Damage;
-					if (Brain.Decisions() > 0)
+					if (BrainDecisions > 0)
 					{
-						const FBrainDecision& Ld = Brain.LastDecision();
 						if (Ld.ScriptIndex >= 0 && Ld.ScriptIndex < FEncounterStats::MaxSlots) { Stats.BossDamageAfterSlot[Ld.ScriptIndex] += E.Damage; }
 						Stats.BossDamageAfterKind[static_cast<int32_t>(Ld.Kind)] += E.Damage;
 					}
@@ -263,10 +179,13 @@ namespace HW
 			}
 		}
 
-		Observer.ProcessFrame(Events, Duel, PlayerMovement, Model, bRecordSymbols ? &Symbols : nullptr);
-		Stats.Symbols = Observer.Emitted();
-		Stats.CountersLanded = Brain.CountersLanded();
-		Stats.ShadowScriptSpm = Brain.ShadowScriptRate(Duel.Frame);
+		if (BossBrain != nullptr)
+		{
+			BossBrain->OnFrame(Events, Duel, Geometry, PlayerMovement);
+			Stats.Symbols = BossBrain->SymbolsObserved();
+			Stats.CountersLanded = BossBrain->CountersLanded();
+			Stats.ShadowScriptSpm = BossBrain->ShadowScriptRate(Duel.Frame);
+		}
 		if (Duel.IsOver()) { CloseRow(); }
 	}
 }

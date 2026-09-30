@@ -18,27 +18,27 @@ UHWDuelSubsystem* UHWBossBrainComponent::GetDuel() const
 	return World != nullptr ? World->GetSubsystem<UHWDuelSubsystem>() : nullptr;
 }
 
-const HW::FBossBrain* UHWBossBrainComponent::GetBrain() const
+const HW::IBossBrain* UHWBossBrainComponent::GetBrain() const
 {
 	const UHWDuelSubsystem* Duel = GetDuel();
-	return (Duel != nullptr && Duel->GetEncounter() != nullptr) ? &Duel->GetEncounter()->Brain : nullptr;
+	return (Duel != nullptr && Duel->GetEncounter() != nullptr) ? Duel->GetEncounter()->Brain() : nullptr;
 }
 
 bool UHWBossBrainComponent::IsAdaptationEnabled() const
 {
-	const HW::FBossBrain* B = GetBrain();
-	return B != nullptr && B->IsAdaptive();
+	const HW::IBossBrain* B = GetBrain();
+	return B != nullptr && B->Mode() == HW::EBrainMode::Hellwalker;
 }
 
 FString UHWBossBrainComponent::GetLastReason() const
 {
-	const HW::FBossBrain* B = GetBrain();
+	const HW::IBossBrain* B = GetBrain();
 	return B != nullptr ? ToFString(B->LastDecision().Reason) : FString();
 }
 
 float UHWBossBrainComponent::GetReadBits() const
 {
-	const HW::FBossBrain* B = GetBrain();
+	const HW::IBossBrain* B = GetBrain();
 	return B != nullptr ? B->LastDecision().ReadBits : 0.f;
 }
 

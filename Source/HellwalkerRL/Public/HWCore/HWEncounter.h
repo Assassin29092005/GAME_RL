@@ -1,60 +1,20 @@
-// Hellwalker — engine-free core. One encounter: duel + symbol observer + boss brain + telemetry.
+// HellwalkerRL — engine-free core. One encounter: duel + boss brain + telemetry.
 //
 // Frame order, identical in Unreal and in the simulator:
-//   1. ThinkBoss(Distance)     — the brain may commit; it sees nothing the player pressed THIS frame
+//   1. ThinkBoss(Geometry)     — the brain may commit; it sees nothing the player pressed THIS frame
 //   2. <caller applies player input to Duel>  (timestamped input, PLAN §5.2)
-//   3. StepFrame(Oracle, Move) — resolve contacts, advance, dispatch events to model / brain / stats
+//   3. StepFrame(Oracle, Move) — resolve contacts, advance, dispatch events to the brain and the stats
 //
-// The observer implements PLAN §2.1's cadence: a symbol at every commitment event, a movement symbol
-// when a boss damage window resolves with no player commitment, and a 45-frame watchdog.
+// The brain is NOT owned: the caller keeps it (and whatever session memory it has) alive across encounters.
 
 #pragma once
 
-#include "HWBossBrain.h"
+#include "HWBrain.h"
 
 #include <vector>
 
 namespace HW
 {
-	struct FSymbolRecord
-	{
-		ESym    Sym = ESym::Neutral;
-		int32_t Frame = 0;
-		int32_t Lead = FPlaystyleModel::NoTiming;
-	};
-
-	class FSymbolObserver
-	{
-	public:
-		static constexpr int32_t WatchdogFrames = 45;
-		/**
-		 * Timing samples (the sidecar's "when") are only taken when the impact the player timed to lands at least
-		 * this far after the boss commits (~300 ms). Against a faster wind-up the press time is set by the
-		 * player's reaction, not chosen: a parry that comes 1 frame late against a 12-frame slash says nothing
-		 * about when this player presses against a 24-frame heavy — and averaging the two (with feint reads
-		 * measured from the fake) made the brain believe a player who parries on time "presses late", and throw
-		 * fast attacks and heavies into their parry (B0 net-exchange finding).
-		 */
-		static constexpr int32_t TimingHorizonFrames = 18;
-
-		void Reset();
-		/** Process one frame's events, in order, then the watchdog. Emits into Model (may be null). */
-		void ProcessFrame(const std::vector<FDuelEvent>& Events, const FDuel& Duel, ESym PlayerMovement,
-			FPlaystyleModel* Model, std::vector<FSymbolRecord>* OutLog);
-		int32_t Emitted() const { return NumEmitted; }
-
-	private:
-		void Emit(ESym S, int32_t Frame, int32_t Lead, FPlaystyleModel* Model, std::vector<FSymbolRecord>* OutLog,
-			int32_t Bit = FPlaystyleModel::NoBait);
-
-		int32_t LastEmitFrame = 0;
-		int32_t LastBossCommitFrame = -1;
-		EMoveId PendingBossMove = EMoveId::None;
-		bool    bBossSwingPending = false;
-		bool    bPlayerCommittedSinceBossSwing = false;
-		int32_t NumEmitted = 0;
-	};
-
 	struct FEncounterStats
 	{
 		int32_t Frames = 0;
@@ -65,9 +25,9 @@ namespace HW
 		int32_t BossOutcomes[5] = {};    // indexed by EHitOutcome
 		int32_t PlayerOutcomes[5] = {};
 		int32_t Decisions = 0;
-		int32_t DecisionKinds[8] = {};   // indexed by EDecisionKind
+		int32_t DecisionKinds[NumDecisionKinds] = {};   // indexed by EDecisionKind
 		int32_t CountersLanded = 0;
-		int32_t Symbols = 0;
+		int32_t Symbols = 0;             // classic brain only: symbols its observer emitted
 		int32_t PlayerGuardBreaks = 0;
 		int32_t BossExposed = 0;
 		int32_t PlayerDeaths = 0;        // immortal mode counts would-be deaths
@@ -86,10 +46,10 @@ namespace HW
 		float   PlayerDamageBySlot[MaxSlots] = {};    // boss damage dealt, attributed the same way
 		int32_t DecisionsBySlot[MaxSlots] = {};
 		int32_t SwingsBySlot[MaxSlots] = {};
-		float   BossDamageAfterKind[8] = {};           // ... and to the last decision's kind (EDecisionKind)
-		float   PlayerDamageByKind[8] = {};
+		float   BossDamageAfterKind[NumDecisionKinds] = {};  // ... and to the last decision's kind (EDecisionKind)
+		float   PlayerDamageByKind[NumDecisionKinds] = {};
 		int32_t ArgmaxViolations = 0;      // C3
-		// §1.2 floor controller, as logged: its matched-player reference at the end, and its mean output.
+		// §1.2 floor controller, as logged (classic brain): its matched-player reference at the end, and its mean output.
 		float   ShadowScriptSpm = 0.f;
 		float   PressureBiasSum = 0.f;     // summed over decisions
 		float   FloorCorrectionSum = 0.f;  // summed over decisions
@@ -119,25 +79,23 @@ namespace HW
 	{
 	public:
 		FDuel           Duel;
-		FSymbolObserver Observer;
-		FBossBrain      Brain;
 		FEncounterStats Stats;
 
-		bool bRecordSymbols = false;
 		bool bRecordRows = true;
 		bool bImmortal = false; // rate-measurement mode: nobody dies, would-be deaths are counted
 
-		/** ResetEncounter(): duel + brain reset, seeded; the session model persists (PLAN §2.3). */
-		void Begin(FPlaystyleModel* SessionModel, EBrainMode Mode, int32_t Seed, bool bInImmortal = false);
+		/** ResetEncounter(): duel reset, the brain begins a new fight (its session memory persists — PLAN §2.3). */
+		void Begin(IBossBrain* InBrain, int32_t Seed, bool bInImmortal = false);
 
-		/** Step 1 of a frame. Returns true if the brain made a slot decision this frame. */
-		bool ThinkBoss(float Distance);
+		/** Step 1 of a frame. Returns true if the brain made a decision this frame. */
+		bool ThinkBoss(const FDuelGeometry& Geo);
 		/** Step 3 of a frame. PlayerMovement: Neutral / Advance / Retreat from locomotion this frame. */
 		void StepFrame(IContactOracle& Oracle, ESym PlayerMovement);
 
+		IBossBrain* Brain() const { return BossBrain; }
 		const std::vector<FDuelEvent>& FrameEvents() const { return Events; }
-		const FBrainDecision& LastDecision() const { return Brain.LastDecision(); }
-		std::vector<FSymbolRecord>& SymbolLog() { return Symbols; }
+		const FBrainDecision& LastDecision() const;
+		bool PopReadMeter(FReadMeterEvent& Out) { return BossBrain != nullptr && BossBrain->PopReadMeter(Out); }
 		/** Completed exchange rows since the last call. */
 		void TakeRows(std::vector<FExchangeRow>& Out) { Out.swap(Rows); Rows.clear(); }
 		bool IsOver() const { return !bImmortal && Duel.IsOver(); }
@@ -146,9 +104,9 @@ namespace HW
 		void OpenRow(const FBrainDecision& D);
 		void CloseRow();
 
-		FPlaystyleModel* Model = nullptr;
+		IBossBrain* BossBrain = nullptr;
+		FDuelGeometry Geometry;      // as of this frame's ThinkBoss; handed to the brain after the step
 		std::vector<FDuelEvent> Events;
-		std::vector<FSymbolRecord> Symbols;
 		std::vector<FExchangeRow> Rows;
 		FExchangeRow OpenExchange;
 		bool bRowOpen = false;
