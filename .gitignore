@@ -1,0 +1,62 @@
+# Unreal (PLAN §7)
+Binaries/
+Intermediate/
+Saved/
+DerivedDataCache/
+.vs/
+.vsconfig
+*.sln
+*.suo
+*.opensdf
+*.sdf
+*.VC.db
+*.VC.opendb
+
+# B0 simulator build output
+Sim/out/
+
+# Fab packs (C2) — large, re-downloadable; never pushed (PLAN §7: LFS is the wrong transport)
+Content/Fighter_Animations/
+Content/FreeAnimationLibrary/
+Content/ParagonSevarog/
+Content/ParagonSunWukong/
+Content/SlashTrail_SoftTofu/
+Content/__ExternalActors__/
+Content/__ExternalObjects__/
+Content/ParagonProps/
+Content/KiteDemo/
+Content/TheLightHouseOfNoReturn/
+Content/Lighting/
+Content/SampleMap/
+Content/Scifi_desert_city/
+Content/Sword/
+Content/NiagaraExamples/
+Content/Stone_Golem/
+
+# Game Animation Sample content (copied from D:\Shadow\GameAnimationSample — 5.5 GB, never pushed)
+Content/Audio/
+Content/Blueprints/
+Content/Characters/
+Content/Input/
+Content/IsolatedExamples/
+Content/Levels/
+Content/MetaHumans/
+Content/Misc/
+Content/Movies/
+Content/Widgets/
+Content/Collections/
+Content/Developers/
+
+# RL training (RL.md): the Python venv, pip scratch, runs and checkpoints stay local; exported models are tracked
+RL/.venv/
+RL/.pip-tmp/
+RL/runs/
+RL/checkpoints/
+RL/native/out/
+__pycache__/
+*.pyc
+
+# Packaged game (Tools\Package.bat)
+Build/Packaged/
+
+content_copy.log
