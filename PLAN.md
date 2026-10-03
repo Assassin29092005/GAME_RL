@@ -464,8 +464,9 @@ All wrong on purpose. Their job is to give every done-test a pass criterion and 
 
 | Parameter | Placeholder |
 |---|---|
-| Parry window | 8 frames before impact |
+| Parry window | 12 frames before impact (8 until 2026-10: too tight in play) |
 | Parry reward floor (always paid) | 15 boss sha-chi + 20-frame uncancellable stagger |
+| After a parry | the keeper starts no attack until 45 frames after its stun ends (~1.1 s from the parry); it may guard, step and move |
 | Hitstun / Blockstun frames | 18 / 11 |
 | CancelWindowStartFrame, fast / heavy | 20 / 44 |
 | Ghoststep i-frames / recovery / cost | frames 3–18 of 24 / 10 / 12 sha-chi |

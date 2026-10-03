@@ -1,5 +1,7 @@
 #include "HWDuelSubsystem.h"
 #include "HWAudio.h"
+#include "HWTelemetry.h"
+#include "HWSettings.h"
 #include "Misc/Parse.h"
 #include "Misc/CommandLine.h"
 #include "HWAnimTypes.h"
@@ -254,6 +256,17 @@ void UHWDuelSubsystem::ResetEncounter(int32 InSeed)
 		}
 	}
 	Encounter->Begin(Brain, Seed, false);
+	bNotResearch = false;
+	NotResearchWhy.Reset();
+	bRecordPending = false;
+	if (const UHWSettingsSubsystem* Set = GetWorld()->GetGameInstance() != nullptr ? GetWorld()->GetGameInstance()->GetSubsystem<UHWSettingsSubsystem>() : nullptr)
+	{
+		FightDifficulty = UHWSettingsSubsystem::DifficultyName(Set->GetDifficulty());
+	}
+	if (UHWTelemetrySubsystem* Telemetry = GetWorld()->GetGameInstance() != nullptr ? GetWorld()->GetGameInstance()->GetSubsystem<UHWTelemetrySubsystem>() : nullptr)
+	{
+		Telemetry->BeginFight(); // the notebook as this fight starts (after BeginEncounter flushed the last one's decision)
+	}
 	{
 		// Which boss (open world shrines): its own health (and, for Pathbreaker, its own script). In the arena an RL keeper
 		// chosen by look or -HWKeeper gets its own health (RL::KeeperHealthScale), as in training and the open world.
@@ -362,6 +375,12 @@ void UHWDuelSubsystem::EndEncounter(bool bPlayerWon)
 		bParityTimeout ? TEXT("time (nobody fell)") : (bPlayerWon ? *FString::Printf(TEXT("the %s falls"), UTF8_TO_TCHAR(HW::RL::KeeperName(KeeperIdentity))) : TEXT("you died")),
 		St.Frames / 60.f, St.PlayerDamageTaken, St.BossDamageTaken, St.SwingsPerMin(), St.CountersLanded);
 	if (!ParityPath.IsEmpty()) { WriteParityRecord(bPlayerWon); }
+	// The anonymous research record of this duel (web/CONTRACT.md); silent when telemetry is not set up. Inside
+	// HandleEvents it waits for the frame's READ (a READ on the killing blow belongs to this fight).
+	bRecordPending = true;
+	bPendingWon = bPlayerWon;
+	bPendingTimeout = bParityTimeout;
+	if (!bInHandleEvents) { FlushFightRecord(); }
 	if (UHWAudioSubsystem* Audio = GetWorld()->GetSubsystem<UHWAudioSubsystem>()) { Audio->OnDuelEnd(bPlayerWon); }
 	OnEncounterEnded.Broadcast(bPlayerWon);
 }
@@ -409,9 +428,27 @@ void UHWDuelSubsystem::WriteParityRecord(bool bPlayerWon)
 	UE_LOG(LogHellwalkerRL, Log, TEXT("Parity record %d written (%s)."), S != nullptr ? S->EncountersStarted : 0, *ParityPath);
 }
 
+void UHWDuelSubsystem::FlushFightRecord()
+{
+	if (!bRecordPending) { return; }
+	bRecordPending = false;
+	UGameInstance* GI = GetWorld() != nullptr ? GetWorld()->GetGameInstance() : nullptr;
+	if (UHWTelemetrySubsystem* Telemetry = GI != nullptr ? GI->GetSubsystem<UHWTelemetrySubsystem>() : nullptr)
+	{
+		Telemetry->RecordFight(*this, bPendingWon, bPendingTimeout);
+	}
+}
+
+void UHWDuelSubsystem::MarkNotResearch(const TCHAR* Why)
+{
+	if (!bNotResearch) { NotResearchWhy = Why; }
+	bNotResearch = true;
+}
+
 void UHWDuelSubsystem::DebugKill(HW::ESide Side)
 {
 	if (!Encounter.IsValid() || State != EHWEncounterState::Running) { return; }
+	MarkNotResearch(TEXT("hw.Kill ended it"));
 	HW::FFighter& F = Encounter->Duel.Get(Side);
 	F.ApplyDamage(F.Health + 1.f);
 	// The duel ends on a Death EVENT (raised when a blow kills); a debug kill raises none, so end it here.
@@ -452,12 +489,14 @@ void UHWDuelSubsystem::QueuePlayerInput(EHWPlayerAction Action, HW::EDir StepDir
 void UHWDuelSubsystem::InjectParry(int32 FramesBeforeImpact)
 {
 	InjectParryOffset = FramesBeforeImpact;
+	MarkNotResearch(TEXT("hw.InjectParry"));
 	UE_LOG(LogHellwalkerRL, Log, TEXT("hw.InjectParry: a parry will be pressed exactly %d frames before the next boss swing's impact."), FramesBeforeImpact);
 }
 
 void UHWDuelSubsystem::SetAutoplay(bool bEnable, HW::EBotKind Kind, float Skill)
 {
 	bAutoplay = bEnable;
+	if (bEnable) { MarkNotResearch(TEXT("the autoplay bot")); }
 	AutoplayKind = Kind;
 	AutoplaySkill = Skill;
 	AutoplayWalk = FVector2D::ZeroVector;
@@ -660,6 +699,7 @@ void UHWDuelSubsystem::HandleEvents()
 {
 	HW::FEncounter& E = *Encounter;
 	UHWAudioSubsystem* Audio = GetWorld()->GetSubsystem<UHWAudioSubsystem>();
+	bInHandleEvents = true;
 	// A trade can kill both on one frame: the keeper's death decides it, as in the training env (FRLEnv) — the player won.
 	bool bBossDiedThisFrame = false;
 	for (const HW::FDuelEvent& Ev : E.FrameEvents())
@@ -762,6 +802,8 @@ void UHWDuelSubsystem::HandleEvents()
 		}
 		Rumble(1.f, 0.3f);
 	}
+	bInHandleEvents = false;
+	FlushFightRecord();
 }
 
 // =================================================================================================

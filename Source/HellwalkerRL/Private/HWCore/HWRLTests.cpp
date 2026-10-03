@@ -1537,8 +1537,7 @@ namespace HW
 		};
 
 		/** A step-left habit player vs FOneMoveBrain for 120 s: its share of step-left answers early (swings 1-8) and late (31+). */
-		void LearningRun(float LearnRate, FBotMemory* Memory, int32_t Seed, float& OutEarly, float& OutLate, int32_t& OutSwings,
-			EMoveId Attack = EMoveId::BSweepLeft, float* OutHitRate = nullptr)
+		FBotProfile StepLeftHabit(float LearnRate)
 		{
 			FBotProfile P = MakeBotProfile(EBotKind::Varied, 0.8f);
 			P.Kind = EBotKind::Habit;
@@ -1548,6 +1547,13 @@ namespace HW
 			P.AggroRate = 0.f;
 			P.PunishRate = 0.f;
 			P.LearnRate = LearnRate;
+			return P;
+		}
+
+		void LearningRun(float LearnRate, FBotMemory* Memory, int32_t Seed, float& OutEarly, float& OutLate, int32_t& OutSwings,
+			EMoveId Attack = EMoveId::BSweepLeft, float* OutHitRate = nullptr)
+		{
+			const FBotProfile P = StepLeftHabit(LearnRate);
 			FOneMoveBrain Brain;
 			Brain.Attack = Attack;
 			FEncounter Enc;
@@ -1619,12 +1625,22 @@ namespace HW
 			const float QLeft = Class >= 0 ? Mem.Q[Class][2] : 0.f;
 			Logf(Log, "always-step-left vs a %s-only keeper (it hits that habit %.0f%% of the time), 120 s: fixed habit steps left %.2f (answers 1-8) -> %.2f (31+); learning player %.2f -> %.2f (hit %.0f%%), Q(StepL) %+.2f after %d updates",
 				Move(Worst).Name, 100.f * WorstHit, FixedEarly, FixedLate, LearnEarly, LearnLate, 100.f * LearnHit, QLeft, Mem.Updates);
+			// What the memory carries into the session's next fight, exactly (the bot's own weights at its start), not 8 noisy answers.
+			const FBotProfile Learner = StepLeftHabit(0.3f);
+			const float PFresh = HabitChoiceProbability(Learner, nullptr, 0, Class, 2);
+			const float PCarried = HabitChoiceProbability(Learner, &Mem, 0, Class, 2);
+			if (Class >= 0)
+			{
+				Logf(Log, "what it learned about this swing: parry %+.2f block %+.2f left %+.2f right %+.2f back %+.2f fwd %+.2f attack %+.2f none %+.2f",
+					Mem.Q[Class][0], Mem.Q[Class][1], Mem.Q[Class][2], Mem.Q[Class][3], Mem.Q[Class][4], Mem.Q[Class][5], Mem.Q[Class][6], Mem.Q[Class][7]);
+			}
 			float NextEarly = 0.f, NextLate = 0.f;
 			int32_t NextSwings = 0;
 			LearningRun(0.3f, &Mem, 78, NextEarly, NextLate, NextSwings, Worst);
-			Logf(Log, "next fight on the same memory: steps left %.2f in its first 8 answers (a fresh learner: %.2f)", NextEarly, LearnEarly);
+			Logf(Log, "next fight on the same memory: P(step left) %.2f at its start (a fresh learner: %.2f); steps left in its first 8 answers %.2f (fresh %.2f)",
+				PCarried, PFresh, NextEarly, LearnEarly);
 			return Worst != EMoveId::None && WorstHit > 0.5f && FixedSwings > 40 && LearnSwings > 40 && FixedEarly > 0.6f
-				&& LearnLate < FixedEarly - 0.3f && LearnHit < WorstHit - 0.05f && QLeft < -0.3f && Mem.Updates > 20 && NextEarly < LearnEarly;
+				&& LearnLate < FixedEarly - 0.3f && LearnHit < WorstHit - 0.05f && QLeft < -0.3f && Mem.Updates > 20 && PCarried < PFresh - 0.1f;
 		}
 
 		bool TestNotebook(std::string& Log)

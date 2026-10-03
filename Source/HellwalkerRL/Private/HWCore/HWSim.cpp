@@ -177,6 +177,32 @@ namespace HW
 		}
 	}
 
+	float HabitWeights(const FBotProfile& P, const FBotMemory* Mem, int32_t Phase, int32_t C, float OutW[FBotProfile::HabitResponses])
+	{
+		// A learning player tilts its habit by what each answer has earned against this keeper (a small floor keeps every
+		// answer reachable, so a habit can be unlearned into something it never did before).
+		const float* Row = P.Habit[Phase > 0 ? 1 : 0][C];
+		const bool bLearn = P.LearnRate > 0.f && Mem != nullptr;
+		const float Temp = P.LearnTemp > 0.05f ? P.LearnTemp : 0.05f;
+		float Sum = 0.f;
+		for (int32_t I = 0; I < FBotProfile::HabitResponses; ++I)
+		{
+			float W = Row[I] > 0.f ? Row[I] : 0.f;
+			if (P.LearnRate > 0.f) { W = (W + 0.02f) * (bLearn ? std::exp(Mem->Q[C][I] / Temp) : 1.f); }
+			OutW[I] = W;
+			Sum += W;
+		}
+		return Sum;
+	}
+
+	float HabitChoiceProbability(const FBotProfile& P, const FBotMemory* Mem, int32_t Phase, int32_t C, int32_t R)
+	{
+		if (C < 0 || C >= FBotProfile::HabitClasses || R < 0 || R >= FBotProfile::HabitResponses) { return 0.f; }
+		float W[FBotProfile::HabitResponses];
+		const float Sum = HabitWeights(P, Mem, Phase, C, W);
+		return Sum > 0.f ? W[R] / Sum : 0.f;
+	}
+
 	FBotProfile MakeBotProfile(EBotKind Kind, float Skill)
 	{
 		FBotProfile P;
@@ -340,21 +366,9 @@ namespace HW
 			const int32_t C = HabitClassOf(M);
 			RespClass = -1;
 			if (C < 0 || Rng.Chance(Prof.HabitNoise)) { return Resp[Rng.RandHelper(FBotProfile::HabitResponses)]; }
-			const float* Row = Prof.Habit[HabitPhase][C];
-			// A learning player tilts its habit by what each answer has earned against this keeper (a small floor
-			// keeps every answer reachable, so a habit can be unlearned into something it never did before).
 			float Wt[FBotProfile::HabitResponses];
-			const FBotMemory& Mem = Memory != nullptr ? *Memory : OwnMemory;
 			const bool bLearn = Prof.LearnRate > 0.f;
-			const float Temp = Prof.LearnTemp > 0.05f ? Prof.LearnTemp : 0.05f;
-			float Sum = 0.f;
-			for (int32_t I = 0; I < FBotProfile::HabitResponses; ++I)
-			{
-				float W = Row[I] > 0.f ? Row[I] : 0.f;
-				if (bLearn) { W = (W + 0.02f) * std::exp(Mem.Q[C][I] / Temp); }
-				Wt[I] = W;
-				Sum += W;
-			}
+			const float Sum = HabitWeights(Prof, Memory != nullptr ? Memory : &OwnMemory, HabitPhase, C, Wt);
 			if (Sum <= 0.f) { return EResp::None; }
 			float R = Rng.FRand() * Sum;
 			EResp Picked = EResp::None;

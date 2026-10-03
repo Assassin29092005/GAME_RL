@@ -5,15 +5,22 @@
 #include "HWSaveGame.h"
 #include "HWSessionSubsystem.h"
 #include "HWCharacterBase.h"
+#include "HWMap.h"
 #include "HWMenu.h"
+#include "HWOpenWorld.h"
 #include "HWPlayerController.h"
 #include "HWSettings.h"
 #include "HWTypesUE.h"
+#include "HWWorldGen.h"
+#include "Camera/PlayerCameraManager.h"
+#include "CanvasItem.h"
 #include "Engine/Canvas.h"
 #include "Engine/Engine.h"
 #include "Engine/Font.h"
 #include "Engine/GameInstance.h"
+#include "Engine/Texture2D.h"
 #include "Engine/World.h"
+#include "GlobalRenderResources.h"
 
 namespace
 {
@@ -170,6 +177,86 @@ void AHWHUD::Panel(float X, float Y, float W, float H)
 	DrawRect(WithAlpha(Crimson, 0.95f), X, Y, W, 3.f * UI);
 }
 
+void AHWHUD::FillTriangle(const FVector2D& A, const FVector2D& B, const FVector2D& C, const FLinearColor& Color)
+{
+	FCanvasUVTri T;
+	T.V0_Pos = A;
+	T.V1_Pos = B;
+	T.V2_Pos = C;
+	T.V0_Color = Color;
+	T.V1_Color = Color;
+	T.V2_Color = Color;
+	FCanvasTriangleItem Item(A, B, C, GWhiteTexture);
+	Item.TriangleList.Reset();
+	Item.TriangleList.Add(T);
+	Item.BlendMode = SE_BLEND_Translucent;
+	Canvas->DrawItem(Item);
+}
+
+void AHWHUD::FillDiamond(const FVector2D& At, float R, const FLinearColor& Color)
+{
+	const FVector2D N(At.X, At.Y - R);
+	const FVector2D E(At.X + R, At.Y);
+	const FVector2D So(At.X, At.Y + R);
+	const FVector2D W(At.X - R, At.Y);
+	FillTriangle(N, E, So, Color);
+	FillTriangle(N, So, W, Color);
+}
+
+void AHWHUD::FillCircle(const FVector2D& At, float R, const FLinearColor& Color)
+{
+	constexpr int32 Segments = 20;
+	FCanvasTriangleItem Item(At, At, At, GWhiteTexture);
+	Item.TriangleList.Reset();
+	for (int32 I = 0; I < Segments; ++I)
+	{
+		const float A0 = 2.f * UE_PI * static_cast<float>(I) / Segments;
+		const float A1 = 2.f * UE_PI * static_cast<float>(I + 1) / Segments;
+		FCanvasUVTri T;
+		T.V0_Pos = At;
+		T.V1_Pos = At + FVector2D(FMath::Cos(A0), FMath::Sin(A0)) * R;
+		T.V2_Pos = At + FVector2D(FMath::Cos(A1), FMath::Sin(A1)) * R;
+		T.V0_Color = Color;
+		T.V1_Color = Color;
+		T.V2_Color = Color;
+		Item.TriangleList.Add(T);
+	}
+	Item.BlendMode = SE_BLEND_Translucent;
+	Canvas->DrawItem(Item);
+}
+
+void AHWHUD::RingCircle(const FVector2D& At, float R, const FLinearColor& Color, float Thickness)
+{
+	constexpr int32 Segments = 28;
+	for (int32 I = 0; I < Segments; ++I)
+	{
+		const float A0 = 2.f * UE_PI * static_cast<float>(I) / Segments;
+		const float A1 = 2.f * UE_PI * static_cast<float>(I + 1) / Segments;
+		DrawLine(At.X + FMath::Cos(A0) * R, At.Y + FMath::Sin(A0) * R, At.X + FMath::Cos(A1) * R, At.Y + FMath::Sin(A1) * R, Color, Thickness);
+	}
+}
+
+void AHWHUD::KeeperIcon(const FVector2D& At, float R, bool bCleared, bool bSealed)
+{
+	const FLinearColor C = AHWOpenWorldGameMode::KeeperColor(bCleared, bSealed);
+	FillDiamond(At, R + FMath::Max(2.f, 2.5f * UI), FLinearColor(0.f, 0.f, 0.f, 0.85f));
+	FillDiamond(At, R, bCleared ? WithAlpha(C, 0.55f) : C);
+	const float T = FMath::Max(1.5f, 2.2f * UI);
+	if (bSealed) { DrawRect(Ink, At.X - R * 0.62f, At.Y - T * 0.5f, R * 1.24f, T); } // the seal across its gate
+	if (bCleared)
+	{
+		DrawLine(At.X - R * 0.45f, At.Y - R * 0.45f, At.X + R * 0.45f, At.Y + R * 0.45f, Ink, T);
+		DrawLine(At.X - R * 0.45f, At.Y + R * 0.45f, At.X + R * 0.45f, At.Y - R * 0.45f, Ink, T);
+	}
+}
+
+void AHWHUD::ShadowText(const FString& S, float X, float Y, const FLinearColor& C, UFont* Font, float Scale, bool bCenter)
+{
+	const float O = FMath::Max(1.f, 1.5f * UI);
+	Text(S, X + O, Y + O, FLinearColor(0.f, 0.f, 0.f, 0.85f * C.A), Font, Scale, bCenter);
+	Text(S, X, Y, C, Font, Scale, bCenter);
+}
+
 // =================================================================================================
 // Frame
 // =================================================================================================
@@ -218,6 +305,7 @@ void AHWHUD::DrawHelp()
 		{ TEXT("Middle mouse"), TEXT("R3"), TEXT("strafe (face the camera direction)") },
 		{ TEXT("RMB (hold)"), TEXT("LT (hold)"), TEXT("aim") },
 		{ K(EHWBind::Interact), P(EHWBind::Interact), TEXT("ring a bell (rest, checkpoint) / challenge a keeper at a shrine gate") },
+		{ K(EHWBind::Map), P(EHWBind::Map), TEXT("the valley map: every keeper and bell, where you are - pick the keeper to track") },
 	};
 	const TArray<FRow> Fight = {
 		{ TEXT("W A S D"), TEXT("left stick"), TEXT("move (locked on: strafe around the keeper)") },
@@ -596,8 +684,12 @@ void AHWHUD::DrawOpenWorld(AHWOpenWorldGameMode* GM, UHWDuelSubsystem* Duel)
 		DrawTitle(GM);
 		return;
 	case EHWWorldPhase::Exploring:
-		DrawExplore(GM);
+	{
+		// Under the valley map the exploring HUD would only show through its veil.
+		const AHWPlayerController* PC = Cast<AHWPlayerController>(GetOwningPlayerController());
+		if (PC == nullptr || !PC->IsMapOpen()) { DrawExplore(GM); }
 		break;
+	}
 	case EHWWorldPhase::Duel:
 	case EHWWorldPhase::DuelOver:
 		if (Duel != nullptr && Duel->GetEncounter() != nullptr)
@@ -657,21 +749,38 @@ void AHWHUD::DrawCompass(AHWOpenWorldGameMode* GM)
 	}
 	TArray<AHWOpenWorldGameMode::FMarker> Markers;
 	GM->GetMarkers(Markers);
+	FVector From = Eye;
+	float FromYaw = 0.f;
+	GM->GetPlayerSpot(From, FromYaw); // distances from where you stand, as on the map
+	const float Pulse = 0.5f + 0.5f * FMath::Sin(Clock * 5.f);
+	auto Diamond = [this](float X, float CY, float R, const FLinearColor& C, float T)
+	{
+		DrawLine(X, CY - R, X + R, CY, C, T);
+		DrawLine(X + R, CY, X, CY + R, C, T);
+		DrawLine(X, CY + R, X - R, CY, C, T);
+		DrawLine(X - R, CY, X, CY - R, C, T);
+	};
 	for (const AHWOpenWorldGameMode::FMarker& M : Markers)
 	{
 		const FVector To = M.Location - Eye;
 		const float D = FMath::FindDeltaAngleDegrees(Yaw, static_cast<float>(To.Rotation().Yaw));
 		const float X = CX + FMath::Clamp(D, -90.f, 90.f) / 90.f * W * 0.5f;
-		const float R = (M.bPrimary ? 7.f : 5.f) * S;
-		DrawLine(X, Y + 6.f * S - R, X + R, Y + 6.f * S, M.Color, 2.f * S);
-		DrawLine(X + R, Y + 6.f * S, X, Y + 6.f * S + R, M.Color, 2.f * S);
-		DrawLine(X, Y + 6.f * S + R, X - R, Y + 6.f * S, M.Color, 2.f * S);
-		DrawLine(X - R, Y + 6.f * S, X, Y + 6.f * S - R, M.Color, 2.f * S);
+		if (M.bTracked)
+		{
+			// The tracked keeper: larger, filled, pulsing, ringed in gold.
+			const float R = (8.f + 2.f * Pulse) * S;
+			FillDiamond(FVector2D(X, Y + 6.f * S), R, M.Color);
+			Diamond(X, Y + 6.f * S, R + 3.f * S, WithAlpha(Gold, 0.55f + 0.45f * Pulse), 2.f * S);
+		}
+		else
+		{
+			Diamond(X, Y + 6.f * S, (M.bPrimary ? 7.f : 5.f) * S, M.Color, 2.f * S);
+		}
 
-		// In-world marker with the distance, for anything ahead within reason.
-		const float Dist = static_cast<float>(To.Size2D()) / 100.f;
+		// In-world marker with the distance, for anything ahead within reason (the tracked keeper's: DrawKeeperTracking).
+		const float Dist = static_cast<float>(FVector::Dist2D(M.Location, From)) / 100.f;
 		const FVector P = Project(M.Location);
-		if (P.Z > 0.f && Dist < 900.f && Dist > 25.f && P.X > 0.f && P.X < Canvas->ClipX && P.Y > 0.f && P.Y < Canvas->ClipY)
+		if (!M.bTracked && P.Z > 0.f && Dist < 900.f && Dist > 25.f && P.X > 0.f && P.X < Canvas->ClipX && P.Y > 0.f && P.Y < Canvas->ClipY)
 		{
 			FLinearColor C = M.Color;
 			C.A = FMath::Clamp(1.2f - Dist / 900.f, 0.35f, 1.f);
@@ -680,44 +789,182 @@ void AHWHUD::DrawCompass(AHWOpenWorldGameMode* GM)
 	}
 }
 
+void AHWHUD::DrawKeeperTracking(AHWOpenWorldGameMode* GM, float TopInset, float BottomInset, const TArray<FBox2D>& Avoid)
+{
+	APlayerController* PCtrl = GetOwningPlayerController();
+	if (PCtrl == nullptr) { return; }
+	const float S = UI;
+	FVector Eye;
+	FRotator View;
+	PCtrl->GetPlayerViewPoint(Eye, View);
+	const float Fov = PCtrl->PlayerCameraManager != nullptr ? PCtrl->PlayerCameraManager->GetFOVAngle() : 90.f;
+	const FVector2D Screen(Canvas->ClipX, Canvas->ClipY);
+	const double Focal = HWMap::FocalPixels(Screen.X, Fov);
+	HWMap::FInsets In;
+	In.Left = 58.f * S;
+	In.Right = 58.f * S;
+	In.Top = TopInset;
+	In.Bottom = BottomInset;
+	FVector From = Eye;
+	float FromYaw = 0.f;
+	GM->GetPlayerSpot(From, FromYaw);
+
+	TArray<AHWOpenWorldGameMode::FMarker> Markers;
+	GM->GetMarkers(Markers);
+	Markers.RemoveAll([](const AHWOpenWorldGameMode::FMarker& M) { return M.Keeper < 0; });
+	Markers.StableSort([](const AHWOpenWorldGameMode::FMarker& A, const AHWOpenWorldGameMode::FMarker& B) { return !A.bTracked && B.bTracked; }); // tracked on top
+	const float Pulse = 0.5f + 0.5f * FMath::Sin(Clock * 5.f);
+	TArray<FBox2D> Taken = Avoid; // + the labels drawn so far (two keepers in one direction must not print over each other)
+	for (const AHWOpenWorldGameMode::FMarker& M : Markers)
+	{
+		const float Dist = static_cast<float>(FVector::Dist2D(M.Location, From)) / 100.f;
+		const FString Label = FString::Printf(TEXT("%s  %.0f m"), *M.Label, Dist);
+		UFont* Font = M.bTracked ? GEngine->GetMediumFont() : GEngine->GetSmallFont();
+		const float TS = (M.bTracked ? 0.95f : 1.05f) * S;
+		float TW = 0.f;
+		float TH = 0.f;
+		GetTextSize(Label, TW, TH, Font, TS);
+		const HWMap::FEdgeMarker E = HWMap::PlaceEdgeMarker(HWMap::ToCameraSpace(Eye, View, M.Location), Screen, Focal, In);
+		if (E.bOnScreen)
+		{
+			// On screen: the compass's world label covers the others (within 900 m); the tracked keeper is marked at any distance.
+			if (!M.bTracked) { continue; }
+			const FVector P = Project(M.Location);
+			const FVector2D At = P.Z > 0.f ? FVector2D(P.X, P.Y) : E.Pos;
+			const float R = (8.f + 3.f * Pulse) * S;
+			FillDiamond(At, R + 2.5f * S, FLinearColor(0.f, 0.f, 0.f, 0.6f));
+			FillDiamond(At, R, M.Color);
+			RingCircle(At, R + (7.f + 3.f * Pulse) * S, WithAlpha(Gold, 0.35f + 0.5f * Pulse), 2.f * S);
+			const FVector2D LabelAt(FMath::Clamp(static_cast<float>(At.X), 14.f * S + TW * 0.5f, Canvas->ClipX - 14.f * S - TW * 0.5f), At.Y + R + 14.f * S);
+			const FBox2D LabelBox(FVector2D(LabelAt.X - TW * 0.5f - 6.f * S, LabelAt.Y - 3.f * S), FVector2D(LabelAt.X + TW * 0.5f + 6.f * S, LabelAt.Y + TH + 3.f * S));
+			DrawRect(FLinearColor(0.f, 0.f, 0.f, 0.5f), LabelBox.Min.X, LabelBox.Min.Y, LabelBox.Max.X - LabelBox.Min.X, LabelBox.Max.Y - LabelBox.Min.Y);
+			Text(Label, LabelAt.X, LabelAt.Y, Gold, Font, TS, true);
+			Taken.Add(LabelBox);
+			continue;
+		}
+
+		// Off screen: a notched arrowhead on the inset border pointing at it, its name and distance on the inner side.
+		const float A = (M.bTracked ? 17.f + 3.f * Pulse : 12.f) * S;
+		const FVector2D D = E.Dir;
+		const FVector2D Side(-D.Y, D.X);
+		auto Head = [&](float K, const FLinearColor& C)
+		{
+			const FVector2D Tip = E.Pos + D * (A * K);
+			const FVector2D L = E.Pos - D * (A * 0.55f * K) + Side * (A * 0.6f * K);
+			const FVector2D R = E.Pos - D * (A * 0.55f * K) - Side * (A * 0.6f * K);
+			const FVector2D Notch = E.Pos - D * (A * 0.1f * K);
+			FillTriangle(Tip, L, Notch, C);
+			FillTriangle(Tip, Notch, R, C);
+		};
+		if (M.bTracked) { Head(1.45f, WithAlpha(Gold, 0.5f + 0.45f * Pulse)); }
+		Head(1.22f, FLinearColor(0.f, 0.f, 0.f, 0.75f));
+		Head(1.f, M.Color);
+		const FVector2D Anchor = E.Pos - D * (A * 0.75f + 10.f * S);
+		float TX = static_cast<float>(Anchor.X - TW * 0.5f * (1.0 + D.X));
+		float TY = static_cast<float>(Anchor.Y - TH * 0.5f * (1.0 + D.Y));
+		TX = FMath::Clamp(TX, 8.f * S, Canvas->ClipX - 8.f * S - TW);
+		TY = FMath::Clamp(TY, TopInset - TH, Canvas->ClipY - 8.f * S - TH);
+		FBox2D LabelBox(FVector2D(TX - 6.f * S, TY - 3.f * S), FVector2D(TX + TW + 6.f * S, TY + TH + 3.f * S));
+		const float Push = (TH + 8.f * S) * (TY + TH * 0.5f > Canvas->ClipY * 0.5f ? -1.f : 1.f); // stack toward the middle of the screen
+		for (int32 Try = 0; Try < 6 && Taken.ContainsByPredicate([&LabelBox](const FBox2D& Other) { return Other.Intersect(LabelBox); }); ++Try)
+		{
+			TY += Push;
+			LabelBox = LabelBox.ShiftBy(FVector2D(0.0, Push));
+		}
+		DrawRect(FLinearColor(0.f, 0.f, 0.f, 0.45f), LabelBox.Min.X, LabelBox.Min.Y, LabelBox.Max.X - LabelBox.Min.X, LabelBox.Max.Y - LabelBox.Min.Y);
+		Text(Label, TX, TY, M.bTracked ? Gold : WithAlpha(Ink, 0.92f), Font, TS);
+		Taken.Add(LabelBox);
+	}
+}
+
 void AHWHUD::DrawExplore(AHWOpenWorldGameMode* GM)
 {
 	const float S = UI;
+	UFont* Small = GEngine->GetSmallFont();
+	UFont* Medium = GEngine->GetMediumFont();
+	UFont* Large = GEngine->GetLargeFont();
 	DrawCompass(GM);
-	Text(GM->ObjectiveText(), 40.f * S, 34.f * S, Ink, GEngine->GetMediumFont(), 1.1f * S);
+
+	// Measured first, drawn last: the objective and the tracking line (top left), the prompt (centre), the exploring keys
+	// (bottom right, the first 20 s). The keepers' edge arrows keep clear of all of them.
+	const FString Objective = GM->ObjectiveText();
+	float OW = 0.f;
+	float OH = 0.f;
+	GetTextSize(Objective.IsEmpty() ? FString(TEXT("Ag")) : Objective, OW, OH, Medium, 1.1f * S);
+	const float TrackY = 34.f * S + OH + 4.f * S;
+	TArray<AHWOpenWorldGameMode::FKeeperView> Keepers;
+	GM->GetKeepers(Keepers);
+	const int32 Tracked = GM->GetTrackedKeeper();
+	const AHWOpenWorldGameMode::FKeeperView* K = Keepers.FindByPredicate([Tracked](const AHWOpenWorldGameMode::FKeeperView& V) { return V.Index == Tracked; });
+	FString Line;
+	float LW = 0.f;
+	float LH = 0.f;
+	if (K != nullptr)
+	{
+		FVector From = FVector::ZeroVector;
+		float FromYaw = 0.f;
+		GM->GetPlayerSpot(From, FromYaw);
+		Line = FString::Printf(TEXT("Tracking: %s  %.0f m%s"), *K->Title, FVector::Dist2D(From, K->Location) / 100.0, K->bSealed ? TEXT("  (sealed)") : TEXT(""));
+		GetTextSize(Line, LW, LH, Medium, 0.9f * S);
+	}
+
+	const FString& Prompt = GM->GetPrompt();
+	const float PromptY = Canvas->ClipY * 0.74f;
+	float PW = 0.f;
+	float PH = 0.f;
+	if (!Prompt.IsEmpty()) { GetTextSize(Prompt, PW, PH, Large, 1.f * S); }
+	const FBox2D PromptBox(FVector2D(Canvas->ClipX * 0.5f - PW * 0.5f - 18.f * S, PromptY - 8.f * S), FVector2D(Canvas->ClipX * 0.5f + PW * 0.5f + 18.f * S, PromptY + PH + 8.f * S));
+
+	const float HelpA = FMath::Clamp(1.f - (GM->GetPhaseSeconds() - 20.f) / 4.f, 0.f, 1.f);
+	const bool bPad = PadActive();
+	const FString HelpLines[] = {
+		bPad ? FString(TEXT("Left stick  move    LB  sprint    A  jump / vault / mantle / climb"))
+			: FString(TEXT("WASD  move    Shift  sprint    Space  jump / vault / mantle / climb")),
+		bPad ? FString(TEXT("B  crouch (running: slide)    X  ragdoll (A: get up)    RB  walk"))
+			: FString(TEXT("C  crouch (running: slide)    R  ragdoll (Space: get up)    Ctrl  walk")),
+		FString::Printf(TEXT("%s  ring a bell / challenge a keeper    %s  map    %s  all controls    %s  menu"), *KeyName(static_cast<uint8>(EHWBind::Interact), bPad),
+			*KeyName(static_cast<uint8>(EHWBind::Map), bPad), *KeyName(static_cast<uint8>(EHWBind::Help), bPad), bPad ? TEXT("Start") : TEXT("Esc")),
+	};
+	float Widest = 0.f;
+	for (const FString& L : HelpLines) { Widest = FMath::Max(Widest, TextWidth(L, Small, 1.1f * S)); }
+	const float HelpX = Canvas->ClipX - 40.f * S - Widest;
+	const float HelpY = Canvas->ClipY - 92.f * S;
+	const FBox2D HelpBox(FVector2D(HelpX - 10.f * S, HelpY - 6.f * S), FVector2D(Canvas->ClipX - 30.f * S, HelpY + 3.f * 22.f * S + 4.f * S));
+
+	TArray<FBox2D> Avoid;
+	if (!Prompt.IsEmpty()) { Avoid.Add(PromptBox); }
+	if (HelpA > 0.f) { Avoid.Add(HelpBox); }
+	// Below the compass, the objective and the tracking line; above the keys while they show (eased as they fade).
+	DrawKeeperTracking(GM, FMath::Max(TrackY + LH + 30.f * S, 110.f * S), (74.f + 78.f * HelpA) * S, Avoid);
+
+	// A soft backing so the two lines read over a bright slope too.
+	const FString MapHint = FString::Printf(TEXT("[%s]  map"), *KeyName(static_cast<uint8>(EHWBind::Map), bPad));
+	const float HintW = K != nullptr ? TextWidth(MapHint, Small, 1.0f * S) : 0.f;
+	const float BlockW = FMath::Max(OW, K != nullptr ? LW + 16.f * S + HintW : 0.f);
+	DrawRect(FLinearColor(0.f, 0.f, 0.f, 0.3f), 30.f * S, 28.f * S, BlockW + 20.f * S, TrackY - 28.f * S + (K != nullptr ? LH + 6.f * S : 0.f));
+	if (K != nullptr)
+	{
+		ShadowText(Line, 40.f * S, TrackY, Gold, Medium, 0.9f * S);
+		ShadowText(MapHint, 40.f * S + LW + 16.f * S, TrackY + 3.f * S, Dim, Small, 1.0f * S);
+	}
+	Text(Objective, 40.f * S, 34.f * S, Ink, Medium, 1.1f * S);
 	if (const UHWSaveGame* Save = GM->GetSave())
 	{
 		FString Right = Save->Mode == EHWPlayMode::Pathbreaker ? TEXT("PATHBREAKER") : (Save->Mode == EHWPlayMode::SixtySixDays ? TEXT("66 DAYS") : TEXT("HELLWALKER"));
 		if (Save->Mode == EHWPlayMode::SixtySixDays) { Right += FString::Printf(TEXT("   day %d  -  %d left"), UHWSaveGame::Days - Save->DaysLeft + 1, Save->DaysLeft); }
-		Text(Right, Canvas->ClipX - 40.f * S - TextWidth(Right, GEngine->GetMediumFont(), 1.f * S), 34.f * S, Save->Mode == EHWPlayMode::Pathbreaker ? Dim : Ember,
-			GEngine->GetMediumFont(), 1.f * S);
+		Text(Right, Canvas->ClipX - 40.f * S - TextWidth(Right, Medium, 1.f * S), 34.f * S, Save->Mode == EHWPlayMode::Pathbreaker ? Dim : Ember, Medium, 1.f * S);
 	}
-	if (!GM->GetPrompt().IsEmpty())
+	if (!Prompt.IsEmpty())
 	{
-		const float Y = Canvas->ClipY * 0.74f;
-		float W = 0.f;
-		float H = 0.f;
-		GetTextSize(GM->GetPrompt(), W, H, GEngine->GetLargeFont(), 1.f * S);
-		DrawRect(FLinearColor(0.f, 0.f, 0.f, 0.45f), Canvas->ClipX * 0.5f - W * 0.5f - 18.f * S, Y - 8.f * S, W + 36.f * S, H + 16.f * S);
-		Text(GM->GetPrompt(), Canvas->ClipX * 0.5f, Y, Gold, GEngine->GetLargeFont(), 1.f * S, true);
+		DrawRect(FLinearColor(0.f, 0.f, 0.f, 0.45f), PromptBox.Min.X, PromptBox.Min.Y, PromptBox.Max.X - PromptBox.Min.X, PromptBox.Max.Y - PromptBox.Min.Y);
+		Text(Prompt, Canvas->ClipX * 0.5f, PromptY, Gold, Large, 1.f * S, true);
 	}
-	const float A = FMath::Clamp(1.f - (GM->GetPhaseSeconds() - 20.f) / 4.f, 0.f, 1.f);
-	if (A > 0.f)
+	if (HelpA > 0.f)
 	{
-		const FLinearColor C = WithAlpha(Dim, A);
-		const bool bPad = PadActive();
-		const FString Lines[] = {
-			bPad ? FString(TEXT("Left stick  move    LB  sprint    A  jump / vault / mantle / climb"))
-				: FString(TEXT("WASD  move    Shift  sprint    Space  jump / vault / mantle / climb")),
-			bPad ? FString(TEXT("B  crouch (running: slide)    X  ragdoll (A: get up)    RB  walk"))
-				: FString(TEXT("C  crouch (running: slide)    R  ragdoll (Space: get up)    Ctrl  walk")),
-			FString::Printf(TEXT("%s  ring a bell / challenge a keeper    %s  all controls    %s  menu"), *KeyName(static_cast<uint8>(EHWBind::Interact), bPad),
-				*KeyName(static_cast<uint8>(EHWBind::Help), bPad), bPad ? TEXT("Start") : TEXT("Esc")),
-		};
-		float Y = Canvas->ClipY - 92.f * S;
-		for (const FString& L : Lines)
+		float Y = HelpY;
+		for (const FString& L : HelpLines)
 		{
-			Text(L, Canvas->ClipX - 660.f * S, Y, C, GEngine->GetSmallFont(), 1.1f * S);
+			Text(L, HelpX, Y, WithAlpha(Dim, HelpA), Small, 1.1f * S);
 			Y += 22.f * S;
 		}
 	}
@@ -829,6 +1076,7 @@ void AHWHUD::DrawMenu(AHWPlayerController* PC)
 	case EHWMenuPage::Settings: DrawSettingsMenu(PC, M); break;
 	case EHWMenuPage::Tutorial: DrawTutorial(PC, M); break;
 	case EHWMenuPage::Notebook: DrawNotebookMenu(PC, M); break;
+	case EHWMenuPage::Map:      DrawMapMenu(PC, M); break;
 	default: break;
 	}
 	if (M.IsConfirming()) { DrawConfirm(PC, M); }
@@ -847,9 +1095,10 @@ void AHWHUD::DrawMenuFooter(AHWPlayerController* PC, const FHWMenu& M, float X, 
 		{
 		case EHWMenuPage::Settings: Hint = TEXT("D-pad  select     Left / Right  change     A  accept     B  back     LB / RB  tabs"); break;
 		case EHWMenuPage::Tutorial: Hint = TEXT("Left / Right  turn the page     A  next     B  close"); break;
+		case EHWMenuPage::Map:      Hint = TEXT("D-pad up / down  keeper     A  track it     LT / RT  zoom     right stick  pan     B / D-pad left  close"); break;
 		default:                    Hint = TEXT("D-pad  select     A  accept     B  back"); break;
 		}
-		if (Page != EHWMenuPage::Title) { Hint += TEXT("     Start  resume"); }
+		if (Page != EHWMenuPage::Title && Page != EHWMenuPage::Map) { Hint += TEXT("     Start  resume"); }
 	}
 	else
 	{
@@ -858,6 +1107,10 @@ void AHWHUD::DrawMenuFooter(AHWPlayerController* PC, const FHWMenu& M, float X, 
 		case EHWMenuPage::Settings: Hint = TEXT("Up / Down  select     Left / Right  change     Enter  accept     Esc  back     Q / E  tabs"); break;
 		case EHWMenuPage::Tutorial: Hint = TEXT("Left / Right  turn the page     Enter  next     Esc  close"); break;
 		case EHWMenuPage::Title:    Hint = TEXT("Up / Down  select     Enter  accept     1 / 2 / 3  a new walk"); break;
+		case EHWMenuPage::Map:
+			Hint = FString::Printf(TEXT("Up / Down  keeper     Enter or click  track it     Wheel  zoom     Drag  pan     %s / Esc  close"),
+				*KeyName(static_cast<uint8>(EHWBind::Map), false));
+			break;
 		default:                    Hint = TEXT("Up / Down  select     Enter  accept     Esc  back"); break;
 		}
 	}
@@ -1275,6 +1528,277 @@ void AHWHUD::DrawNotebookMenu(AHWPlayerController* PC, const FHWMenu& M)
 	DrawNotebookPage(PX + Margin, PY + 108.f * S, PW - 2.f * Margin, PH - 108.f * S - 150.f * S);
 	DrawButtonRow(M, PX + PW * 0.5f, PY + PH - 104.f * S, 210.f * S, 50.f * S, !M.IsConfirming());
 	DrawMenuFooter(PC, M, PX + Margin, PY + PH - 38.f * S, PW - 2.f * Margin, true);
+}
+
+UTexture2D* AHWHUD::GetMapTexture(const AHWOpenWorldGameMode* GM)
+{
+	if (MapTexture != nullptr) { return MapTexture; }
+	const AHWOpenWorld* World = GM != nullptr ? GM->GetOpenWorld() : nullptr;
+	const HWMap::FPicture* Picture = World != nullptr ? World->GetMapPicture() : nullptr;
+	if (Picture == nullptr || Picture->Size <= 0 || Picture->Pixels.Num() != Picture->Size * Picture->Size) { return nullptr; }
+	// One upload (1 MB): sRGB pixels in PF_B8G8R8A8, which is FColor's own layout.
+	const TConstArrayView64<uint8> Bytes(reinterpret_cast<const uint8*>(Picture->Pixels.GetData()), static_cast<int64>(Picture->Pixels.Num()) * sizeof(FColor));
+	MapTexture = UTexture2D::CreateTransient(Picture->Size, Picture->Size, PF_B8G8R8A8, NAME_None, Bytes);
+	return MapTexture;
+}
+
+void AHWHUD::DrawMapMenu(AHWPlayerController* PC, const FHWMenu& M)
+{
+	UWorld* World = GetWorld();
+	AHWOpenWorldGameMode* GM = World != nullptr ? World->GetAuthGameMode<AHWOpenWorldGameMode>() : nullptr;
+	if (GM == nullptr) { return; }
+	const float S = UI;
+	UFont* Small = GEngine->GetSmallFont();
+	UFont* Medium = GEngine->GetMediumFont();
+	DrawRect(FLinearColor(0.012f, 0.01f, 0.011f, 0.8f), 0.f, 0.f, Canvas->ClipX, Canvas->ClipY);
+
+	// Layout: the map square on the left, the keepers and the legend beside it, the keys underneath.
+	const float Gap = 28.f * S;
+	const float TopH = 80.f * S;
+	const float FootH = 86.f * S;
+	const float SideW = FMath::Clamp(Canvas->ClipX * 0.27f, 340.f * S, 470.f * S);
+	const float Side = FMath::Max(160.f, FMath::Min(Canvas->ClipY - TopH - FootH, Canvas->ClipX - SideW - 3.f * Gap));
+	const float X0 = FMath::Max(Gap, (Canvas->ClipX - Side - Gap - SideW) * 0.5f);
+	const float Y0 = TopH;
+	const float SX = X0 + Side + Gap;
+	PC->SetMapScreen(FVector2D(X0, Y0), Side);
+	const HWMap::FView V = PC->GetMapView();
+	const bool bBoxes = !M.IsConfirming();
+	const float Pulse = 0.5f + 0.5f * FMath::Sin(Clock * 4.f);
+	auto ToScreen = [&V](const FVector& W) { return V.UVToScreen(HWMap::WorldToUV(FVector2D(W.X, W.Y), FHWWorldGen::HalfExtent)); };
+
+	Text(M.GetInfo().Title, X0, 20.f * S, Ink, GEngine->GetLargeFont(), 1.3f * S);
+	const FString Objective = GM->ObjectiveText();
+	Text(Objective, X0 + Side - TextWidth(Objective, Medium, 1.f * S), 36.f * S, Dim, Medium, 1.f * S);
+
+	// ---- the picture --------------------------------------------------------------------------------------------
+	DrawRect(FLinearColor(0.f, 0.f, 0.f, 0.95f), X0 - 3.f * S, Y0 - 3.f * S, Side + 6.f * S, Side + 6.f * S);
+	if (UTexture2D* Tex = GetMapTexture(GM))
+	{
+		const FVector2D Min = V.WindowMin();
+		DrawTexture(Tex, X0, Y0, Side, Side, Min.X, Min.Y, V.WindowSize(), V.WindowSize(), FLinearColor::White, BLEND_Opaque);
+	}
+	else
+	{
+		DrawRect(FLinearColor(0.05f, 0.045f, 0.04f, 1.f), X0, Y0, Side, Side);
+		Text(TEXT("Charting the valley..."), X0 + Side * 0.5f, Y0 + Side * 0.5f - 12.f * S, Dim, Medium, 1.1f * S, true);
+	}
+
+	// ---- bells ----------------------------------------------------------------------------------------------------
+	const float LabelPad = 8.f * S;
+	auto ClampLabelX = [&](float CX, float W) { return FMath::Clamp(CX, X0 + LabelPad + W * 0.5f, X0 + Side - LabelPad - W * 0.5f); };
+	TArray<AHWOpenWorldGameMode::FBellView> Bells;
+	GM->GetBells(Bells);
+	for (const AHWOpenWorldGameMode::FBellView& B : Bells)
+	{
+		const FVector2D P = ToScreen(B.Location);
+		if (!V.Contains(P, 4.0)) { continue; }
+		FillCircle(P, 7.5f * S, FLinearColor(0.f, 0.f, 0.f, 0.8f));
+		FillCircle(P, 5.f * S, B.bLit ? FLinearColor(1.f, 0.7f, 0.25f) : FLinearColor(0.55f, 0.5f, 0.45f));
+		if (B.bCheckpoint) { RingCircle(P, 11.f * S, WithAlpha(Gold, 0.9f), 1.5f * S); }
+		const float W = TextWidth(B.Title, Small, 0.95f * S);
+		const bool bLeft = P.X + 14.f * S + W > X0 + Side - LabelPad; // no room on the right: write it on the left
+		ShadowText(B.Title, bLeft ? P.X - 14.f * S - W : P.X + 14.f * S, P.Y - 8.f * S, B.bLit ? WithAlpha(Gold, 0.95f) : FLinearColor(0.78f, 0.75f, 0.7f), Small, 0.95f * S);
+	}
+
+	// ---- keepers (click one to track it) ---------------------------------------------------------------------------
+	TArray<AHWOpenWorldGameMode::FKeeperView> Keepers;
+	GM->GetKeepers(Keepers);
+	const int32 Tracked = GM->GetTrackedKeeper();
+	FVector PlayerAt = FVector::ZeroVector;
+	float PlayerYaw = 0.f;
+	const bool bPlayer = GM->GetPlayerSpot(PlayerAt, PlayerYaw);
+	auto StatusLine = [&](const AHWOpenWorldGameMode::FKeeperView& K)
+	{
+		if (K.bCleared) { return FString(TEXT("cleared")); }
+		const FString State = K.bSealed ? TEXT("sealed until the others fall") : TEXT("open");
+		return bPlayer ? FString::Printf(TEXT("%s  -  %.0f m"), *State, FVector::Dist2D(PlayerAt, K.Location) / 100.0) : State;
+	};
+	for (const AHWOpenWorldGameMode::FKeeperView& K : Keepers)
+	{
+		const FVector2D P = ToScreen(K.Location);
+		if (!V.Contains(P, 2.0)) { continue; }
+		const int32 Item = M.FindItem(AHWPlayerController::TrackId(K.Index));
+		const bool bSel = Item != INDEX_NONE && Item == M.GetSelected();
+		const bool bTracked = K.Index == Tracked;
+		const float R = (bTracked ? 12.f + 2.f * Pulse : 11.f) * S;
+		if (bTracked) { RingCircle(P, R + (8.f + 3.f * Pulse) * S, WithAlpha(Gold, 0.45f + 0.45f * Pulse), 2.5f * S); }
+		if (bSel) { Outline(P.X - R - 6.f * S, P.Y - R - 6.f * S, 2.f * R + 12.f * S, 2.f * R + 12.f * S, WithAlpha(Bright, 0.85f), FMath::Max(1.f, 1.5f * S)); }
+		KeeperIcon(P, R, K.bCleared, K.bSealed);
+		// Name and state under the icon (over it near the bottom edge), kept inside the frame.
+		const FString Status = StatusLine(K);
+		const float NW = TextWidth(K.Title, Medium, 0.9f * S);
+		const float SW = TextWidth(Status, Small, 0.95f * S);
+		const float Clear = R + (bTracked ? 16.f : 8.f) * S; // below the gold ring when tracked
+		const bool bAbove = P.Y + Clear + 44.f * S > Y0 + Side;
+		const float NY = bAbove ? P.Y - Clear - 44.f * S : P.Y + Clear;
+		const FLinearColor NameC = K.bCleared ? FLinearColor(0.7f, 0.78f, 0.95f) : (bTracked ? Gold : Bright);
+		ShadowText(K.Title, ClampLabelX(P.X, NW), NY, NameC, Medium, 0.9f * S, true);
+		ShadowText(Status, ClampLabelX(P.X, SW), NY + 24.f * S, K.bCleared ? Dim : FLinearColor(0.85f, 0.82f, 0.78f), Small, 0.95f * S, true);
+		if (bBoxes && Item != INDEX_NONE && M.GetItems()[Item].bEnabled)
+		{
+			AddHitBox(FVector2D(P.X - R - 8.f * S, P.Y - R - 8.f * S), FVector2D(2.f * R + 16.f * S, 2.f * R + 16.f * S), Box(TEXT("I"), Item), true, 2);
+		}
+	}
+
+	// ---- you ------------------------------------------------------------------------------------------------------
+	if (bPlayer)
+	{
+		FVector2D P = ToScreen(PlayerAt);
+		P.X = FMath::Clamp(P.X, X0 + 6.0, X0 + Side - 6.0); // zoomed away from you: pinned to the frame's edge
+		P.Y = FMath::Clamp(P.Y, Y0 + 6.0, Y0 + Side - 6.0);
+		// Where the camera looks (as the compass): a faint wedge. Then the arrow: the way you face.
+		const float Look = FMath::DegreesToRadians(static_cast<float>(PC->GetControlRotation().Yaw));
+		for (int32 I = 0; I < 3; ++I)
+		{
+			const float A0 = Look + FMath::DegreesToRadians(-30.f + 20.f * I);
+			const float A1 = A0 + FMath::DegreesToRadians(20.f);
+			FillTriangle(P, P + FVector2D(FMath::Cos(A0), FMath::Sin(A0)) * (52.f * S), P + FVector2D(FMath::Cos(A1), FMath::Sin(A1)) * (52.f * S),
+				FLinearColor(0.62f, 0.88f, 1.f, 0.16f));
+		}
+		const float Rad = FMath::DegreesToRadians(PlayerYaw);
+		const FVector2D F(FMath::Cos(Rad), FMath::Sin(Rad)); // +X east = right, +Y south = down
+		const FVector2D Rt(-F.Y, F.X);
+		const float L = 14.f * S;
+		RingCircle(P, (17.f + 5.f * Pulse) * S, FLinearColor(0.55f, 0.85f, 1.f, 0.6f - 0.4f * Pulse), 2.f * S);
+		auto Arrow = [&](float K, const FLinearColor& C)
+		{
+			const FVector2D Tip = P + F * (L * K);
+			const FVector2D BackL = P - F * (L * 0.6f * K) - Rt * (L * 0.6f * K);
+			const FVector2D BackR = P - F * (L * 0.6f * K) + Rt * (L * 0.6f * K);
+			const FVector2D Notch = P - F * (L * 0.2f * K);
+			FillTriangle(Tip, BackL, Notch, C);
+			FillTriangle(Tip, Notch, BackR, C);
+		};
+		Arrow(1.3f, FLinearColor(0.f, 0.f, 0.f, 0.85f));
+		Arrow(1.f, FLinearColor(0.62f, 0.88f, 1.f));
+	}
+
+	// ---- compass letters and the scale ---------------------------------------------------------------------------
+	float TW = 0.f;
+	float TH = 0.f;
+	GetTextSize(TEXT("N"), TW, TH, Medium, 0.95f * S);
+	struct FCard { const TCHAR* Letter; FVector2D At; };
+	const FCard Cards[] = {
+		{ TEXT("N"), FVector2D(X0 + Side * 0.5f, Y0 + 16.f * S) }, { TEXT("S"), FVector2D(X0 + Side * 0.5f, Y0 + Side - 16.f * S) },
+		{ TEXT("W"), FVector2D(X0 + 16.f * S, Y0 + Side * 0.5f) }, { TEXT("E"), FVector2D(X0 + Side - 16.f * S, Y0 + Side * 0.5f) },
+	};
+	for (const FCard& C : Cards)
+	{
+		FillCircle(C.At, 12.f * S, FLinearColor(0.f, 0.f, 0.f, 0.6f));
+		Text(C.Letter, C.At.X, C.At.Y - TH * 0.5f, C.Letter[0] == TEXT('N') ? Ember : Ink, Medium, 0.95f * S, true);
+	}
+	{
+		const double MetresAcross = 2.0 * FHWWorldGen::HalfExtent / 100.0 / V.Zoom;
+		const double PxPerMetre = Side / MetresAcross;
+		double Metres = 50.0;
+		for (const double Nice : { 100.0, 200.0, 250.0, 500.0 }) { if (Nice * PxPerMetre <= 170.0 * S) { Metres = Nice; } }
+		const float Len = static_cast<float>(Metres * PxPerMetre);
+		const float BX = X0 + 40.f * S;
+		const float BY = Y0 + Side - 22.f * S;
+		DrawRect(FLinearColor(0.f, 0.f, 0.f, 0.55f), BX - 8.f * S, BY - 26.f * S, Len + 16.f * S, 36.f * S);
+		DrawRect(Ink, BX, BY, Len, 3.f * S);
+		DrawRect(Ink, BX, BY - 5.f * S, 2.f * S, 11.f * S);
+		DrawRect(Ink, BX + Len - 2.f * S, BY - 5.f * S, 2.f * S, 11.f * S);
+		Text(FString::Printf(TEXT("%.0f m"), Metres), BX + Len * 0.5f, BY - 24.f * S, Ink, Small, 1.0f * S, true);
+	}
+	Outline(X0 - 3.f * S, Y0 - 3.f * S, Side + 6.f * S, Side + 6.f * S, FLinearColor(1.f, 1.f, 1.f, 0.12f), FMath::Max(1.f, S));
+	DrawRect(WithAlpha(Crimson, 0.95f), X0 - 3.f * S, Y0 - 3.f * S, Side + 6.f * S, 3.f * S);
+	if (V.Zoom > 1.01)
+	{
+		const FString Zoom = FString::Printf(TEXT("x%.1f"), V.Zoom);
+		ShadowText(Zoom, X0 + Side - 14.f * S - TextWidth(Zoom, Small, 1.f * S), Y0 + 12.f * S, Dim, Small, 1.f * S);
+	}
+
+	// ---- beside it: the keepers, the selection's line, the legend ---------------------------------------------------
+	Panel(SX, Y0 - 3.f * S, SideW, Side + 6.f * S);
+	const float PX = SX + 24.f * S;
+	const float PW = SideW - 48.f * S;
+	float Y = Y0 + 18.f * S;
+	Text(TEXT("KEEPERS"), PX, Y, Gold, Small, 1.1f * S);
+	Y += 30.f * S;
+	const TArray<FHWMenuItem>& Items = M.GetItems();
+	const float RowH = 70.f * S;
+	for (int32 I = 0; I < Items.Num(); ++I)
+	{
+		const FHWMenuItem& It = Items[I];
+		const int32 KI = AHWPlayerController::ParseTrackId(It.Id);
+		const AHWOpenWorldGameMode::FKeeperView* K = Keepers.FindByPredicate([KI](const AHWOpenWorldGameMode::FKeeperView& Kv) { return Kv.Index == KI; });
+		if (K == nullptr) { continue; }
+		const bool bSel = I == M.GetSelected();
+		const bool bTracked = K->Index == Tracked;
+		const float RH = RowH - 8.f * S;
+		if (bSel)
+		{
+			DrawRect(Select, PX - 12.f * S, Y, PW + 24.f * S, RH);
+			DrawRect(Ember, PX - 12.f * S, Y, 4.f * S, RH);
+		}
+		KeeperIcon(FVector2D(PX + 12.f * S, Y + RH * 0.5f), 10.f * S, K->bCleared, K->bSealed);
+		const FLinearColor TitleC = !It.bEnabled ? Disabled : (bSel ? Bright : (bTracked ? Gold : Ink));
+		Text(It.Label, PX + 38.f * S, Y + 6.f * S, TitleC, Medium, 0.95f * S);
+		Text(StatusLine(*K), PX + 38.f * S, Y + 34.f * S, Dim, Small, 1.0f * S);
+		if (bTracked)
+		{
+			const FString Tag = TEXT("TRACKED");
+			const float TagW = TextWidth(Tag, Small, 0.95f * S);
+			DrawRect(WithAlpha(Gold, 0.18f + 0.1f * Pulse), PX + PW - TagW - 10.f * S, Y + 34.f * S, TagW + 10.f * S, 20.f * S);
+			Text(Tag, PX + PW - TagW - 5.f * S, Y + 35.f * S, Gold, Small, 0.95f * S);
+		}
+		if (bBoxes && It.bEnabled) { AddHitBox(FVector2D(PX - 12.f * S, Y), FVector2D(PW + 24.f * S, RH), Box(TEXT("I"), I), true, 1); }
+		Y += RowH;
+	}
+	if (const FHWMenuItem* Sel = M.GetSelectedItem())
+	{
+		TArray<FString> Lines;
+		Wrap(Sel->Hint, Small, 1.0f * S, PW, Lines);
+		for (int32 L = 0; L < Lines.Num() && L < 3; ++L) { Text(Lines[L], PX, Y + 4.f * S + L * 21.f * S, FLinearColor(0.78f, 0.76f, 0.72f), Small, 1.0f * S); }
+		Y += (8.f + 21.f * FMath::Min(Lines.Num(), 3)) * S;
+	}
+
+	// The legend, at the panel's foot (as many rows as fit at this HUD scale).
+	struct FLegendRow { int32 Kind; const TCHAR* What; };
+	const FLegendRow Legend[] = {
+		{ 0, TEXT("You: the way you face (the wedge: your view)") }, { 1, TEXT("Keeper - open") }, { 2, TEXT("Keeper - sealed until the others fall") },
+		{ 3, TEXT("Keeper - cleared") }, { 4, TEXT("The tracked keeper") }, { 5, TEXT("Bell - rung (you rest there)") }, { 6, TEXT("Bell - not yet rung") },
+		{ 7, TEXT("Path and plazas") },
+	};
+	const float LegendRowH = 25.f * S;
+	const int32 Fit = FMath::Clamp(FMath::FloorToInt32((Y0 + Side - 12.f * S - (Y + 44.f * S)) / LegendRowH), 0, static_cast<int32>(UE_ARRAY_COUNT(Legend)));
+	float LY = Y0 + Side - 12.f * S - Fit * LegendRowH;
+	if (Fit > 0)
+	{
+		DrawRect(WithAlpha(Dim, 0.3f), PX, LY - 34.f * S, PW, FMath::Max(1.f, S));
+		Text(TEXT("LEGEND"), PX, LY - 26.f * S, Gold, Small, 1.1f * S);
+	}
+	for (int32 I = 0; I < Fit; ++I)
+	{
+		const FVector2D C(PX + 12.f * S, LY + LegendRowH * 0.5f);
+		switch (Legend[I].Kind)
+		{
+		case 0:
+			FillTriangle(C, C + FVector2D(16.f, -9.f) * S, C + FVector2D(16.f, 9.f) * S, FLinearColor(0.62f, 0.88f, 1.f, 0.2f));
+			FillTriangle(C + FVector2D(10.f, 0.f) * S, C + FVector2D(-6.f, -6.f) * S, C + FVector2D(-2.f, 0.f) * S, FLinearColor(0.62f, 0.88f, 1.f));
+			FillTriangle(C + FVector2D(10.f, 0.f) * S, C + FVector2D(-2.f, 0.f) * S, C + FVector2D(-6.f, 6.f) * S, FLinearColor(0.62f, 0.88f, 1.f));
+			break;
+		case 1: KeeperIcon(C, 8.f * S, false, false); break;
+		case 2: KeeperIcon(C, 8.f * S, false, true); break;
+		case 3: KeeperIcon(C, 8.f * S, true, false); break;
+		case 4:
+			KeeperIcon(C, 7.f * S, false, false);
+			RingCircle(C, 12.f * S, WithAlpha(Gold, 0.45f + 0.45f * Pulse), 2.f * S);
+			break;
+		case 5:
+			FillCircle(C, 5.f * S, FLinearColor(1.f, 0.7f, 0.25f));
+			RingCircle(C, 10.f * S, WithAlpha(Gold, 0.9f), 1.5f * S);
+			break;
+		case 6: FillCircle(C, 5.f * S, FLinearColor(0.55f, 0.5f, 0.45f)); break;
+		default: DrawRect(FLinearColor(0.52f, 0.4f, 0.29f), C.X - 11.f * S, C.Y - 4.f * S, 22.f * S, 8.f * S); break; // the path dirt, as the picture shows it
+		}
+		Text(Legend[I].What, PX + 34.f * S, LY + (LegendRowH - 18.f * S) * 0.5f, FLinearColor(0.82f, 0.8f, 0.76f), Small, 1.0f * S);
+		LY += LegendRowH;
+	}
+
+	DrawMenuFooter(PC, M, X0, Canvas->ClipY - 40.f * S, Side + Gap + SideW, true);
 }
 
 void AHWHUD::DrawNotebookPage(float X, float Y, float W, float H)

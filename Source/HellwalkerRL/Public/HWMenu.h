@@ -18,7 +18,8 @@ enum class EHWMenuPage : uint8
 	Pause,      // the pause menu (root)
 	Settings,   // tabbed
 	Tutorial,   // "How the keeper learns you": slides
-	Notebook    // the keeper's notebook (drawn by AHWHUD::DrawNotebookPage)
+	Notebook,   // the keeper's notebook (drawn by AHWHUD::DrawNotebookPage)
+	Map         // the open world's valley map (root): one item per keeper — accept tracks it (drawn by AHWHUD::DrawMapMenu)
 };
 
 enum class EHWSettingsTab : uint8

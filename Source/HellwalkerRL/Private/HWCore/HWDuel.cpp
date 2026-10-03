@@ -69,6 +69,7 @@ namespace HW
 		const FMoveData& M = Move(Id);
 		if (M.Id == EMoveId::None || M.Owner != S) { return false; }
 		if (M.ShaChiCost > 0.f && F.ShaChi < M.ShaChiCost) { return false; }
+		if (M.IsAttack() && Frame < F.NoAttackUntil) { return false; } // after being parried: a breath for the player
 		return true;
 	}
 
@@ -203,16 +204,21 @@ namespace HW
 			// Parry pays a floor, always: fixed sha-chi damage + a short uncancellable stagger (PLAN A3).
 			Def.bParrySucceeded = true;
 			Att.SpendShaChi(K.ParryRewardShaChi);
+			int32_t StunFrames = K.ParryRewardStagger;
 			if (Att.ShaChi <= 0.f)
 			{
-				Att.EnterStun(EFighterState::GuardBroken, Attacker == ESide::Boss ? K.BossExposedStun : K.GuardBreakStun);
+				StunFrames = Attacker == ESide::Boss ? K.BossExposedStun : K.GuardBreakStun;
+				Att.EnterStun(EFighterState::GuardBroken, StunFrames);
 				bGuardBroke = true;
 				BrokenSide = Attacker;
 			}
 			else
 			{
-				Att.EnterStun(EFighterState::Stagger, K.ParryRewardStagger);
+				Att.EnterStun(EFighterState::Stagger, StunFrames);
 			}
+			// The keeper's next attack comes after a while, not the moment its stagger ends (the player's own counter-parry
+			// by the keeper's stance leaves the player free).
+			if (Attacker == ESide::Boss) { Att.NoAttackUntil = Frame + StunFrames + K.ParryAttackLockout; }
 			break;
 		}
 		case EHitOutcome::Blocked:

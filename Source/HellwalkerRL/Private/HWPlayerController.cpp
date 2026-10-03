@@ -137,6 +137,7 @@ void AHWPlayerController::BuildInput()
 	Context = NewObject<UInputMappingContext>(this, TEXT("IMC_Hellwalker"));
 
 	IA_Interact = MakeAction(TEXT("IA_HWInteract"), EInputActionValueType::Boolean);
+	IA_Map = MakeAction(TEXT("IA_HWMap"), EInputActionValueType::Boolean);
 	IA_Choice1 = MakeAction(TEXT("IA_HWChoice1"), EInputActionValueType::Boolean);
 	IA_Choice2 = MakeAction(TEXT("IA_HWChoice2"), EInputActionValueType::Boolean);
 	IA_Choice3 = MakeAction(TEXT("IA_HWChoice3"), EInputActionValueType::Boolean);
@@ -154,6 +155,7 @@ void AHWPlayerController::BuildInput()
 	IA_MenuTabNext = MakeAction(TEXT("IA_MenuTabNext"), EInputActionValueType::Boolean, true);
 	IA_MenuScroll = MakeAction(TEXT("IA_MenuScroll"), EInputActionValueType::Axis1D, true);
 	IA_MenuPointer = MakeAction(TEXT("IA_MenuPointer"), EInputActionValueType::Boolean, true);
+	IA_MenuMap = MakeAction(TEXT("IA_MenuMap"), EInputActionValueType::Boolean, true);
 	MenuContext = NewObject<UInputMappingContext>(this, TEXT("IMC_HellwalkerMenu"));
 
 	MapContexts();
@@ -210,6 +212,9 @@ void AHWPlayerController::MapContexts()
 	ExploreContext->UnmapAll();
 	ExploreContext->MapKey(IA_Interact, Key(EHWBind::Interact));
 	ExploreContext->MapKey(IA_Interact, Pad(EHWBind::Interact)); // = E; GASP's own interact, which needs another sandbox character
+	// The map: M and D-pad left shadow the sample's "next visual override" and "next pawn" (they would undress Soul).
+	ExploreContext->MapKey(IA_Map, Key(EHWBind::Map));
+	ExploreContext->MapKey(IA_Map, Pad(EHWBind::Map));
 	ExploreContext->MapKey(IA_Choice1, EKeys::One);
 	ExploreContext->MapKey(IA_Choice2, EKeys::Two);
 	ExploreContext->MapKey(IA_Choice3, EKeys::Three);
@@ -238,6 +243,11 @@ void AHWPlayerController::MapContexts()
 		const FKey PauseKey = Key(EHWBind::Pause);
 		const bool bTaken = MenuContext->GetMappings().ContainsByPredicate([&PauseKey](const FEnhancedActionKeyMapping& M) { return M.Key == PauseKey; });
 		if (!bTaken) { MenuContext->MapKey(IA_MenuToggle, PauseKey); }
+		// So does the map key on the map page (D-pad left as well: on that page left / right do nothing else).
+		const FKey MapKey = Key(EHWBind::Map);
+		const bool bMapTaken = MenuContext->GetMappings().ContainsByPredicate([&MapKey](const FEnhancedActionKeyMapping& M) { return M.Key == MapKey; });
+		if (!bMapTaken) { MenuContext->MapKey(IA_MenuMap, MapKey); }
+		MenuContext->MapKey(IA_MenuMap, Pad(EHWBind::Map));
 	}
 	MenuContext->MapKey(IA_MenuScroll, EKeys::MouseWheelAxis);
 	MenuContext->MapKey(IA_MenuPointer, EKeys::LeftMouseButton);
@@ -289,6 +299,7 @@ void AHWPlayerController::SetupInputComponent()
 	EIC->BindAction(IA_Pause, ETriggerEvent::Started, this, &AHWPlayerController::OnPause);
 	EIC->BindAction(IA_Notebook, ETriggerEvent::Started, this, &AHWPlayerController::OnNotebook);
 	EIC->BindAction(IA_Interact, ETriggerEvent::Started, this, &AHWPlayerController::OnInteract);
+	EIC->BindAction(IA_Map, ETriggerEvent::Started, this, &AHWPlayerController::OnMap);
 	EIC->BindAction(IA_Choice1, ETriggerEvent::Started, this, &AHWPlayerController::OnChoice, 1);
 	EIC->BindAction(IA_Choice2, ETriggerEvent::Started, this, &AHWPlayerController::OnChoice, 2);
 	EIC->BindAction(IA_Choice3, ETriggerEvent::Started, this, &AHWPlayerController::OnChoice, 3);
@@ -303,7 +314,7 @@ void AHWPlayerController::SetupInputComponent()
 	EIC->BindAction(IA_MenuRight, ETriggerEvent::Completed, this, &AHWPlayerController::OnMenuNavCompleted, 4);
 	const TPair<UInputAction*, const TCHAR*> MenuKeys[] = {
 		{ IA_MenuAccept, TEXT("accept") }, { IA_MenuBack, TEXT("back") }, { IA_MenuToggle, TEXT("toggle") },
-		{ IA_MenuTabPrev, TEXT("tabprev") }, { IA_MenuTabNext, TEXT("tabnext") },
+		{ IA_MenuTabPrev, TEXT("tabprev") }, { IA_MenuTabNext, TEXT("tabnext") }, { IA_MenuMap, TEXT("map") },
 	};
 	for (const TPair<UInputAction*, const TCHAR*>& K : MenuKeys)
 	{
@@ -499,6 +510,13 @@ void AHWPlayerController::OnPause()
 {
 	if (Menu.IsOpen()) { CloseMenu(); return; }
 	OpenPauseMenu();
+}
+
+void AHWPlayerController::OnMap()
+{
+	// Exploring only (the action is in the explore context, which a duel does not have); a menu already open keeps it.
+	if (Menu.IsOpen()) { return; }
+	OpenMap();
 }
 
 void AHWPlayerController::OnNotebook()

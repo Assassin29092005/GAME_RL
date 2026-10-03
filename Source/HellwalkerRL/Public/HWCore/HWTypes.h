@@ -96,10 +96,12 @@ namespace HW
 	struct FCombatTuning
 	{
 		// Parry
-		int32_t ParryWindowFrames = 8;          // press in [Impact-8, Impact) parries
+		int32_t ParryWindowFrames = 12;         // press in [Impact-12, Impact) parries (8 until 2026-10: too tight)
 		int32_t ParryWhiffRecovery = 16;        // after the live window, if nothing arrived
 		float   ParryRewardShaChi = 15.f;       // always paid to the parried attacker's sha-chi
 		int32_t ParryRewardStagger = 20;        // uncancellable
+		int32_t ParryAttackLockout = 45;        // the parried KEEPER starts no attack until this long after its stun
+		                                        // ends (~1.1 s from the parry in all); it may guard, step and move
 		// Stun
 		int32_t Hitstun = 18;                   // player, when hit (§6)
 		int32_t BossHitstun = 22;               // boss, when hit: > the player's 20-frame light-chain gap, so

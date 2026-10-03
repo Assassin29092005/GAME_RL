@@ -5,6 +5,7 @@
 #include "HWCharacterBase.h"
 #include "HWDuelSubsystem.h"
 #include "HWHUD.h"
+#include "HWMap.h"
 #include "HWOpenWorld.h"
 #include "HWPlayerCharacter.h"
 #include "HWPlayerController.h"
@@ -394,6 +395,7 @@ void AHWOpenWorldGameMode::NewGame(EHWPlayMode Mode)
 {
 	UHWSaveGame::Erase();
 	Save = UHWSaveGame::NewGame(Mode);
+	PickedKeeper = -1;
 	if (UHWSessionSubsystem* S = GetGameInstance()->GetSubsystem<UHWSessionSubsystem>()) { S->ResetMemory(); }
 	WriteSave();
 	bSaveExists = true;
@@ -408,6 +410,7 @@ bool AHWOpenWorldGameMode::ContinueGame()
 	UHWSaveGame* Loaded = UHWSaveGame::LoadOrNull();
 	if (Loaded == nullptr) { return false; }
 	Save = Loaded;
+	PickedKeeper = -1;
 	RefreshSites();
 	SetPhase(Save->bFinished ? EHWWorldPhase::Ending : EHWWorldPhase::Exploring);
 	if (Phase == EHWWorldPhase::Exploring)
@@ -525,6 +528,7 @@ void AHWOpenWorldGameMode::FinishDuel()
 	if (bLastWon && Shrine != nullptr)
 	{
 		Save->ShrinesCleared |= (1 << ActiveShrine);
+		if (PickedKeeper == ActiveShrine) { PickedKeeper = -1; } // it fell: the tracking follows the objective again
 		RefreshSites();
 		bool bAll = true;
 		for (int32 I = 0; I < Shrines.Num(); ++I) { bAll = bAll && Save->IsShrineCleared(I); }
@@ -722,16 +726,24 @@ FString AHWOpenWorldGameMode::ObjectiveText() const
 	return FString::Printf(TEXT("Break the seals  %d / %d"), Cleared, FMath::Max(0, Shrines.Num() - 1));
 }
 
+FLinearColor AHWOpenWorldGameMode::KeeperColor(bool bCleared, bool bSealed)
+{
+	return bCleared ? FLinearColor(0.4f, 0.6f, 1.f) : (bSealed ? FLinearColor(0.62f, 0.14f, 0.12f) : FLinearColor(0.95f, 0.15f, 0.08f));
+}
+
 void AHWOpenWorldGameMode::GetMarkers(TArray<FMarker>& Out) const
 {
+	const int32 Tracked = GetTrackedKeeper();
 	for (const AHWShrine* S : Shrines)
 	{
-		if (S == nullptr) { continue; }
+		if (S == nullptr || S->bCleared) { continue; } // a fallen keeper drops off the tracking
 		FMarker M;
 		M.Location = S->Center() + FVector(0.f, 0.f, 900.f);
 		M.Label = S->Spec.Title;
-		M.Color = S->bCleared ? FLinearColor(0.4f, 0.6f, 1.f) : (S->bSealed ? FLinearColor(0.5f, 0.1f, 0.1f) : FLinearColor(0.95f, 0.15f, 0.08f));
-		M.bPrimary = !S->bCleared && !S->bSealed;
+		M.Color = KeeperColor(false, S->bSealed);
+		M.bPrimary = !S->bSealed;
+		M.Keeper = S->ShrineIndex;
+		M.bTracked = S->ShrineIndex == Tracked;
 		Out.Add(M);
 	}
 	for (const AHWBell* B : Bells)
@@ -743,4 +755,85 @@ void AHWOpenWorldGameMode::GetMarkers(TArray<FMarker>& Out) const
 		M.Color = (Save != nullptr && Save->IsBellLit(B->BellIndex)) ? FLinearColor(1.f, 0.7f, 0.25f) : FLinearColor(0.55f, 0.5f, 0.45f);
 		Out.Add(M);
 	}
+}
+
+// =================================================================================================
+// The valley map and keeper tracking
+// =================================================================================================
+
+void AHWOpenWorldGameMode::GetKeepers(TArray<FKeeperView>& Out) const
+{
+	for (const AHWShrine* S : Shrines)
+	{
+		if (S == nullptr) { continue; }
+		FKeeperView K;
+		K.Index = S->ShrineIndex;
+		K.Title = S->Spec.Title;
+		K.Location = S->Center();
+		K.bCleared = S->bCleared;
+		K.bSealed = S->bSealed;
+		K.bFinal = S->Spec.bFinal;
+		Out.Add(K);
+	}
+}
+
+void AHWOpenWorldGameMode::GetBells(TArray<FBellView>& Out) const
+{
+	for (const AHWBell* B : Bells)
+	{
+		if (B == nullptr) { continue; }
+		FBellView V;
+		V.Title = B->Title;
+		V.Location = B->GetActorLocation();
+		V.bLit = Save != nullptr && Save->IsBellLit(B->BellIndex);
+		V.bCheckpoint = Save != nullptr && Save->CheckpointBell == B->BellIndex;
+		Out.Add(V);
+	}
+}
+
+bool AHWOpenWorldGameMode::GetPlayerSpot(FVector& OutLocation, float& OutYaw) const
+{
+	const APlayerController* Controller = PC();
+	if (Controller == nullptr) { return false; }
+	if (const APawn* Pawn = Controller->GetPawn())
+	{
+		OutLocation = Pawn->GetActorLocation();
+		OutYaw = static_cast<float>(Pawn->GetActorRotation().Yaw);
+		return true;
+	}
+	FRotator View;
+	Controller->GetPlayerViewPoint(OutLocation, View);
+	OutYaw = static_cast<float>(View.Yaw);
+	return true;
+}
+
+int32 AHWOpenWorldGameMode::GetTrackedKeeper() const
+{
+	TArray<HWMap::FKeeperPin> Pins;
+	Pins.SetNum(Shrines.Num());
+	for (int32 I = 0; I < Shrines.Num(); ++I)
+	{
+		const AHWShrine* S = Shrines[I];
+		if (S == nullptr)
+		{
+			Pins[I].bCleared = true; // no shrine, nothing to track
+			continue;
+		}
+		Pins[I].Pos = FVector2D(S->Center().X, S->Center().Y);
+		Pins[I].bCleared = S->bCleared;
+		Pins[I].bSealed = S->bSealed;
+	}
+	FVector At = FVector::ZeroVector;
+	float Yaw = 0.f;
+	GetPlayerSpot(At, Yaw);
+	return HWMap::ResolveTrackedKeeper(Pins, PickedKeeper, FVector2D(At.X, At.Y));
+}
+
+void AHWOpenWorldGameMode::SetTrackedKeeper(int32 ShrineIndex)
+{
+	const bool bValid = Shrines.IsValidIndex(ShrineIndex) && Shrines[ShrineIndex] != nullptr && !Shrines[ShrineIndex]->bCleared;
+	PickedKeeper = bValid ? ShrineIndex : -1;
+	const int32 Now = GetTrackedKeeper();
+	UE_LOG(LogHellwalkerRL, Log, TEXT("Tracking: %s%s."), Shrines.IsValidIndex(Now) && Shrines[Now] != nullptr ? *Shrines[Now]->Spec.Title : TEXT("nothing"),
+		bValid ? TEXT(" (picked on the map)") : TEXT(" (the objective)"));
 }

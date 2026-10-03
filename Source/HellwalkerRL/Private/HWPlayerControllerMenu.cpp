@@ -10,7 +10,9 @@
 #include "HWOpenWorldGameMode.h"
 #include "HWSaveGame.h"
 #include "HWSessionSubsystem.h"
+#include "HWTelemetry.h"
 #include "HWSettings.h"
+#include "HWWorldGen.h"
 #include "Engine/World.h"
 #include "InputActionValue.h"
 #include "Kismet/GameplayStatics.h"
@@ -23,6 +25,7 @@ namespace
 		const FName Settings(TEXT("Settings"));
 		const FName Tutorial(TEXT("Tutorial"));
 		const FName Notebook(TEXT("Notebook"));
+		const FName OpenStats(TEXT("OpenStats"));
 		const FName Restart(TEXT("Restart"));
 		const FName QuitTitle(TEXT("QuitTitle"));
 		const FName QuitDesktop(TEXT("QuitDesktop"));
@@ -54,6 +57,17 @@ namespace
 	const TCHAR* BindPrefix = TEXT("Bind_");
 
 	FName BindId(EHWBind A) { return FName(*FString::Printf(TEXT("%s%d"), BindPrefix, static_cast<int32>(A))); }
+
+	/** "Open my stats page": the website's page of what the keepers learned about this copy of the game. */
+	FHWMenuItem StatsItem(const UGameInstance* GI)
+	{
+		const UHWTelemetrySubsystem* T = GI != nullptr ? GI->GetSubsystem<UHWTelemetrySubsystem>() : nullptr;
+		const FString Why = T != nullptr ? T->StatsPageUnavailableReason() : FString(TEXT("Stats sharing is not set up in this build."));
+		FHWMenuItem I = FHWMenuItem::Action(Ids::OpenStats, TEXT("Open my stats page"),
+			Why.IsEmpty() ? FString(TEXT("Your skills and what the keepers learned about you, on the website (opens your browser).")) : Why);
+		I.bEnabled = Why.IsEmpty();
+		return I;
+	}
 
 	bool ParseBindId(FName Id, EHWBind& Out)
 	{
@@ -129,6 +143,7 @@ void AHWPlayerController::BuildMenuPage(EHWMenuPage Page, EHWSettingsTab Tab, in
 		}
 		OutItems.Add(FHWMenuItem::Action(Ids::Settings, TEXT("Settings"), TEXT("Difficulty, controls, graphics, audio, accessibility.")));
 		OutItems.Add(FHWMenuItem::Action(Ids::Tutorial, TEXT("How the keeper learns you"), TEXT("Six short pages: what it sees, what it remembers, what READ means.")));
+		OutItems.Add(StatsItem(GetGameInstance()));
 		FHWMenuItem Q = FHWMenuItem::Action(Ids::QuitDesktop, TEXT("Quit to desktop"), TEXT("The keepers forget you when you quit."));
 		Q.Confirm = TEXT("Quit to the desktop?  The keepers will forget you.");
 		OutItems.Add(Q);
@@ -142,6 +157,7 @@ void AHWPlayerController::BuildMenuPage(EHWMenuPage Page, EHWSettingsTab Tab, in
 		OutItems.Add(FHWMenuItem::Action(Ids::Settings, TEXT("Settings"), TEXT("Difficulty, controls, graphics, audio, accessibility.")));
 		OutItems.Add(FHWMenuItem::Action(Ids::Tutorial, TEXT("How the keeper learns you"), TEXT("Six short pages: what it sees, what it remembers, what READ means.")));
 		OutItems.Add(FHWMenuItem::Action(Ids::Notebook, TEXT("The keeper's notebook"), TEXT("What the keepers have written down about you this session.")));
+		OutItems.Add(StatsItem(GetGameInstance()));
 		if (GM == nullptr)
 		{
 			FHWMenuItem R = FHWMenuItem::Action(Ids::Restart, TEXT("Restart duel"), TEXT("A fresh fight.  The keeper keeps what it has learned about you."));
@@ -180,6 +196,29 @@ void AHWPlayerController::BuildMenuPage(EHWMenuPage Page, EHWSettingsTab Tab, in
 		OutInfo.Title = TEXT("THE KEEPER'S NOTEBOOK");
 		OutItems.Add(FHWMenuItem::Action(Ids::Back, TEXT("Back")));
 		return;
+
+	case EHWMenuPage::Map:
+	{
+		// One item per keeper (shrine order): accept tracks it. A fallen keeper stays on the map but cannot be tracked.
+		OutInfo.Title = TEXT("THE VALLEY");
+		if (GM == nullptr) { return; }
+		TArray<AHWOpenWorldGameMode::FKeeperView> Keepers;
+		GM->GetKeepers(Keepers);
+		const int32 Tracked = GM->GetTrackedKeeper();
+		for (const AHWOpenWorldGameMode::FKeeperView& K : Keepers)
+		{
+			FString Hint;
+			if (K.bCleared) { Hint = TEXT("Its seal is broken.  Nothing waits there now."); }
+			else if (K.Index == Tracked) { Hint = TEXT("Tracked: its mark stays on your screen at any distance, and at the screen's edge when it is behind you."); }
+			else if (K.bSealed) { Hint = TEXT("Sealed until the other keepers fall.  Accept to track it anyway."); }
+			else { Hint = TEXT("Accept to track this keeper: its mark stays on your screen at any distance."); }
+			FHWMenuItem I = FHWMenuItem::Action(TrackId(K.Index), K.Title, Hint);
+			I.bEnabled = !K.bCleared;
+			I.Tone = K.Index == Tracked ? EHWMenuTone::Gold : (K.bSealed ? EHWMenuTone::Dim : EHWMenuTone::Normal);
+			OutItems.Add(I);
+		}
+		return;
+	}
 
 	case EHWMenuPage::Settings:
 		break;
@@ -225,6 +264,7 @@ void AHWPlayerController::BuildMenuPage(EHWMenuPage Page, EHWSettingsTab Tab, in
 		for (EHWBind A : { EHWBind::Pause, EHWBind::Notebook, EHWBind::Help, EHWBind::Debug }) { Row(A); }
 		OutItems.Add(FHWMenuItem::Header(TEXT("EXPLORING")));
 		Row(EHWBind::Interact);
+		Row(EHWBind::Map);
 		FHWMenuItem Reset = FHWMenuItem::Action(Ids::ResetBindings, TEXT("Reset to defaults"), TEXT("Every keyboard and mouse key back to how it shipped."));
 		Reset.Confirm = TEXT("Put every key back to its default?");
 		Reset.Tone = EHWMenuTone::Gold;
@@ -329,7 +369,8 @@ void AHWPlayerController::OpenMenuRoot(EHWMenuPage Page, bool bPause)
 		bPausedByMenu = UGameplayStatics::SetGamePaused(this, true);
 	}
 	SetMenuInputActive(true);
-	UE_LOG(LogHellwalkerRL, Log, TEXT("Menu: %s%s."), Page == EHWMenuPage::Title ? TEXT("title") : (Page == EHWMenuPage::Tutorial ? TEXT("tutorial") : TEXT("pause")),
+	UE_LOG(LogHellwalkerRL, Log, TEXT("Menu: %s%s."), Page == EHWMenuPage::Title ? TEXT("title")
+		: (Page == EHWMenuPage::Tutorial ? TEXT("tutorial") : (Page == EHWMenuPage::Map ? TEXT("the valley map") : TEXT("pause"))),
 		bPausedByMenu ? TEXT(" (paused)") : TEXT(""));
 }
 
@@ -476,8 +517,158 @@ bool AHWPlayerController::OpenMenuPage(const FString& Name)
 		Menu.Push(N == TEXT("tutorial") ? EHWMenuPage::Tutorial : EHWMenuPage::Notebook);
 		return true;
 	}
-	UE_LOG(LogHellwalkerRL, Warning, TEXT("hw.Menu: unknown page '%s' (pause | settings | controls | graphics | audio | accessibility | tutorial | notebook | close)."), *Name);
+	if (N == TEXT("map")) { return OpenMap(); }
+	UE_LOG(LogHellwalkerRL, Warning, TEXT("hw.Menu: unknown page '%s' (pause | settings | controls | graphics | audio | accessibility | tutorial | notebook | map | close)."), *Name);
 	return false;
+}
+
+// =================================================================================================
+// The valley map
+// =================================================================================================
+
+FName AHWPlayerController::TrackId(int32 Keeper)
+{
+	return FName(*FString::Printf(TEXT("Track_%d"), Keeper));
+}
+
+int32 AHWPlayerController::ParseTrackId(FName Id)
+{
+	const FString S = Id.ToString();
+	return S.StartsWith(TEXT("Track_")) ? FCString::Atoi(*S.RightChop(6)) : -1;
+}
+
+bool AHWPlayerController::OpenMap()
+{
+	AHWOpenWorldGameMode* GM = GetWorld() != nullptr ? GetWorld()->GetAuthGameMode<AHWOpenWorldGameMode>() : nullptr;
+	if (GM == nullptr || !GM->CanOpenMap())
+	{
+		UE_LOG(LogHellwalkerRL, Log, TEXT("Map: only while exploring the open world."));
+		return false;
+	}
+	// Centred on the player, at the zoom it was left at.
+	FVector At = FVector::ZeroVector;
+	float Yaw = 0.f;
+	if (GM->GetPlayerSpot(At, Yaw)) { MapCenter = HWMap::WorldToUV(FVector2D(At.X, At.Y), FHWWorldGen::HalfExtent); }
+	HWMap::ClampView(MapCenter, MapZoom);
+	bMapDragging = false;
+	if (!IsMapOpen()) { OpenMenuRoot(EHWMenuPage::Map, true); }
+	SelectMenuItem(TrackId(GM->GetTrackedKeeper()));
+	return true;
+}
+
+HWMap::FView AHWPlayerController::GetMapView() const
+{
+	HWMap::FView V;
+	V.Origin = MapOrigin;
+	V.Side = FMath::Max(MapSide, 1.0);
+	V.Center = MapCenter;
+	V.Zoom = MapZoom;
+	return V;
+}
+
+void AHWPlayerController::ZoomMap(double Factor, const FVector2D& Anchor)
+{
+	if (MapSide <= 1.0)
+	{
+		// Not drawn yet: nothing on screen to keep in place.
+		MapZoom *= Factor;
+		HWMap::ClampView(MapCenter, MapZoom);
+		return;
+	}
+	const HWMap::FView Before = GetMapView();
+	const FVector2D Middle = MapOrigin + FVector2D(MapSide * 0.5, MapSide * 0.5);
+	FVector2D At = Anchor;
+	if (!Before.Contains(At))
+	{
+		// No cursor on the map (the triggers, the console): zoom on the player while the map shows them, else on its middle.
+		At = Middle;
+		const AHWOpenWorldGameMode* GM = GetWorld() != nullptr ? GetWorld()->GetAuthGameMode<AHWOpenWorldGameMode>() : nullptr;
+		FVector Spot = FVector::ZeroVector;
+		float Yaw = 0.f;
+		if (GM != nullptr && GM->GetPlayerSpot(Spot, Yaw))
+		{
+			const FVector2D OnMap = Before.UVToScreen(HWMap::WorldToUV(FVector2D(Spot.X, Spot.Y), FHWWorldGen::HalfExtent));
+			if (Before.Contains(OnMap)) { At = OnMap; }
+		}
+	}
+	// Keep the point under the anchor under the anchor.
+	const FVector2D Under = Before.ScreenToUV(At);
+	MapZoom *= Factor;
+	HWMap::ClampView(MapCenter, MapZoom);
+	MapCenter = Under - (At - Middle) / (MapSide * MapZoom);
+	HWMap::ClampView(MapCenter, MapZoom);
+}
+
+void AHWPlayerController::TickMap(float DeltaSeconds)
+{
+	const AHWOpenWorldGameMode* GM = GetWorld() != nullptr ? GetWorld()->GetAuthGameMode<AHWOpenWorldGameMode>() : nullptr;
+	if (GM == nullptr || !GM->CanOpenMap())
+	{
+		CloseMenu(); // exploring ended under it (a scripted duel): the map has nothing to show
+		return;
+	}
+	const float Dt = FMath::Min(DeltaSeconds, 0.1f);
+	// Gamepad: the right stick pans (a window-width in ~1.4 s), the triggers zoom.
+	const FVector2D Stick(GetInputAnalogKeyState(EKeys::Gamepad_RightX), GetInputAnalogKeyState(EKeys::Gamepad_RightY));
+	if (Stick.SizeSquared() > 0.04)
+	{
+		MapCenter += FVector2D(Stick.X, -Stick.Y) * (0.7 / MapZoom) * Dt;
+		HWMap::ClampView(MapCenter, MapZoom);
+	}
+	const float Triggers = GetInputAnalogKeyState(EKeys::Gamepad_RightTriggerAxis) - GetInputAnalogKeyState(EKeys::Gamepad_LeftTriggerAxis);
+	if (FMath::Abs(Triggers) > 0.1f) { ZoomMap(FMath::Exp(1.6 * Triggers * Dt), FVector2D(-1.0, -1.0)); }
+	// The mouse: drag (either button) to pan; a click on a keeper is the HUD's hit box.
+	float MX = 0.f;
+	float MY = 0.f;
+	const bool bMouse = GetMousePosition(MX, MY);
+	const FVector2D Mouse(MX, MY);
+	const bool bHeld = IsInputKeyDown(EKeys::LeftMouseButton) || IsInputKeyDown(EKeys::RightMouseButton);
+	if (bMouse && bHeld && MapSide > 1.0)
+	{
+		if (!bMapDragging)
+		{
+			bMapDragging = GetMapView().Contains(Mouse);
+			MapDragLast = Mouse;
+		}
+		else
+		{
+			MapCenter -= (Mouse - MapDragLast) / (MapSide * MapZoom);
+			HWMap::ClampView(MapCenter, MapZoom);
+			MapDragLast = Mouse;
+		}
+	}
+	else
+	{
+		bMapDragging = false;
+	}
+}
+
+void AHWPlayerController::MapConsole(const TArray<FString>& Args)
+{
+	AHWOpenWorldGameMode* GM = GetWorld() != nullptr ? GetWorld()->GetAuthGameMode<AHWOpenWorldGameMode>() : nullptr;
+	const FString Verb = Args.Num() > 0 ? Args[0].ToLower() : FString(TEXT("toggle"));
+	if (Verb == TEXT("open")) { OpenMap(); }
+	else if (Verb == TEXT("close")) { if (IsMapOpen()) { CloseMenu(); } }
+	else if (Verb == TEXT("toggle"))
+	{
+		if (IsMapOpen()) { CloseMenu(); }
+		else if (!Menu.IsOpen()) { OpenMap(); }
+	}
+	else if (Verb == TEXT("track") && GM != nullptr)
+	{
+		const bool bAuto = Args.Num() < 2 || Args[1].Equals(TEXT("auto"), ESearchCase::IgnoreCase);
+		GM->SetTrackedKeeper(bAuto ? -1 : FCString::Atoi(*Args[1]));
+		if (IsMapOpen()) { Menu.Refresh(); SelectMenuItem(TrackId(GM->GetTrackedKeeper())); }
+	}
+	else if (Verb == TEXT("zoom") && Args.Num() > 1)
+	{
+		const double Want = FMath::Clamp(FCString::Atod(*Args[1]), HWMap::MinZoom, HWMap::MaxZoom);
+		ZoomMap(Want / FMath::Max(MapZoom, HWMap::MinZoom), FVector2D(-1.0, -1.0)); // on the player
+	}
+	else
+	{
+		UE_LOG(LogHellwalkerRL, Warning, TEXT("hw.Map: unknown '%s' (open | close | track <0|1|2|auto> | zoom <1-4>)."), *Verb);
+	}
 }
 
 // =================================================================================================
@@ -511,10 +702,29 @@ void AHWPlayerController::HandleMenuEvent(const FHWMenuEvent& Event)
 	}
 
 	const FName Id = Event.Id;
+	if (const int32 Keeper = ParseTrackId(Id); Keeper >= 0)
+	{
+		// The map: track this keeper (the map stays open; M / Esc closes it).
+		if (GM != nullptr)
+		{
+			GM->SetTrackedKeeper(Keeper);
+			TArray<AHWOpenWorldGameMode::FKeeperView> Keepers;
+			GM->GetKeepers(Keepers);
+			const AHWOpenWorldGameMode::FKeeperView* K = Keepers.FindByPredicate([Keeper](const AHWOpenWorldGameMode::FKeeperView& V) { return V.Index == Keeper; });
+			if (K != nullptr) { ShowMenuMessage(FString::Printf(TEXT("Tracking: %s"), *K->Title)); }
+		}
+		Menu.Refresh();
+		return;
+	}
 	if (Id == Ids::Resume) { CloseMenu(); }
 	else if (Id == Ids::Settings) { PushSettings(EHWSettingsTab::Gameplay); }
 	else if (Id == Ids::Tutorial || Id == Ids::ShowTutorial) { Menu.Push(EHWMenuPage::Tutorial); }
 	else if (Id == Ids::Notebook) { Menu.Push(EHWMenuPage::Notebook); }
+	else if (Id == Ids::OpenStats)
+	{
+		const UHWTelemetrySubsystem* T = GetGameInstance() != nullptr ? GetGameInstance()->GetSubsystem<UHWTelemetrySubsystem>() : nullptr;
+		if (T != nullptr) { T->OpenStatsPage(); }
+	}
 	else if (Id == Ids::Back) { MenuBack(); }
 	else if (Id == HWMenuIds::SlidesDone || Id == Ids::SkipTutorial)
 	{
@@ -638,7 +848,8 @@ void AHWPlayerController::MenuCommand(const FString& Command)
 	else if (C == TEXT("toggle")) { CloseMenu(); } // Start / P: straight back to the game (the title stays)
 	else if (C == TEXT("tabnext")) { Menu.SwitchTab(+1); }
 	else if (C == TEXT("tabprev")) { Menu.SwitchTab(-1); }
-	else { UE_LOG(LogHellwalkerRL, Warning, TEXT("hw.MenuNav: unknown '%s' (up | down | left | right | accept | back | tabnext | tabprev | toggle)."), *Command); }
+	else if (C == TEXT("map")) { if (IsMapOpen()) { CloseMenu(); } } // the map key: closes the map, nothing on the other pages
+	else { UE_LOG(LogHellwalkerRL, Warning, TEXT("hw.MenuNav: unknown '%s' (up | down | left | right | accept | back | tabnext | tabprev | toggle | map)."), *Command); }
 }
 
 void AHWPlayerController::DoMenuNav(int32 Dir)
@@ -671,6 +882,15 @@ void AHWPlayerController::OnMenuScroll(const FInputActionValue& Value)
 {
 	const float V = Value.Get<float>();
 	if (!Menu.IsOpen() || Menu.IsConfirming() || FMath::IsNearlyZero(V)) { return; }
+	if (IsMapOpen())
+	{
+		// The map: the wheel zooms, at the cursor.
+		float MX = -1.f;
+		float MY = -1.f;
+		GetMousePosition(MX, MY);
+		ZoomMap(V > 0.f ? 1.25 : 0.8, FVector2D(MX, MY));
+		return;
+	}
 	Menu.Move(V > 0.f ? -1 : +1);
 }
 
@@ -722,6 +942,8 @@ void AHWPlayerController::TickMenu(float DeltaSeconds)
 			NavRepeatIn = 0.085f;
 		}
 	}
+
+	if (IsMapOpen()) { TickMap(DeltaSeconds); }
 
 	// The open world's title is a menu, open whenever the title is.
 	if (const AHWOpenWorldGameMode* GM = GetWorld() != nullptr ? GetWorld()->GetAuthGameMode<AHWOpenWorldGameMode>() : nullptr)

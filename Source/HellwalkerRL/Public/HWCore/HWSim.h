@@ -126,6 +126,11 @@ namespace HW
 	};
 
 	FBotProfile MakeBotProfile(EBotKind Kind, float Skill);
+	/** A habit player's weights over its 8 answers to a boss swing of class C (table, tilted by a learning player's values;
+	 *  before HabitNoise and the killer override). Returns their sum. The bot draws from these; tests read them. */
+	float HabitWeights(const FBotProfile& P, const FBotMemory* Mem, int32_t Phase, int32_t C, float OutW[FBotProfile::HabitResponses]);
+	/** The probability a habit player answers class C with response R (from HabitWeights). */
+	float HabitChoiceProbability(const FBotProfile& P, const FBotMemory* Mem, int32_t Phase, int32_t C, int32_t R);
 	/** Habit class of a boss swing (its symbol): 0 BFast, 1 BHeavy, 2 BFeint, 3 BKiller; -1 not a boss attack. */
 	int32_t HabitClassOf(const FMoveData& M);
 

@@ -9,6 +9,7 @@
 
 #include "CoreMinimal.h"
 #include "GameFramework/Actor.h"
+#include "HWMap.h"
 #include "HWWorldGen.h"
 #include "HWOpenWorld.generated.h"
 
@@ -37,6 +38,8 @@ public:
 	const TArray<TObjectPtr<AActor>>& GetTraversalBlocks() const { return RuinActors; }
 	/** The ground under a world XY. */
 	FVector GroundAt(const FVector2D& P) const;
+	/** The valley map's picture (HWMap::RenderPicture), rendered once off the game thread when the world is built; null until it is ready. */
+	const HWMap::FPicture* GetMapPicture() const { return MapPicture.IsValid() && MapPicture->bReady ? MapPicture.Get() : nullptr; }
 
 	/** Stats for logs / tests. */
 	int32 NumTriangles = 0;
@@ -65,4 +68,6 @@ private:
 	UPROPERTY() TArray<TObjectPtr<AActor>> RuinActors;
 
 	TUniquePtr<FHWWorldGen> Generator;
+	/** Shared with the task that renders it (which holds its own copy of the generator: safe if the world goes first). */
+	TSharedPtr<HWMap::FPicture, ESPMode::ThreadSafe> MapPicture;
 };

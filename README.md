@@ -35,6 +35,8 @@ engineering contract), [PLAN.md](PLAN.md) (the combat spec). Theme research: [Ph
 | `Tools\Thesis.bat` | B0 — the headless check the reference project had to pass, now run on the RL keeper (`--identity 0\|1\|2`, `--skill`) |
 | `Tools\Parity.bat` | the Unreal-vs-simulator gap: the same autoplay players and keeper in the real game and in the training simulator |
 | `Tools\CI.bat` | what GitHub Actions runs (`.github/workflows/ci.yml`): core tests, env benchmark, torch/C++/ONNX parity, trainer self-tests |
+| **The website** | `web/` — download page + every player's stats and what the keeper learned about them ([web/README.md](web/README.md): Firebase, Render, itch.io). Local preview: `RL\.venv\Scripts\python.exe web\dev\serve.py` |
+| `Tools\ItchPush.bat <user> <game>` | upload the packaged game to itch.io with butler |
 
 ### Controls (F1 in game shows this panel)
 
@@ -55,6 +57,12 @@ fighting key and the menu keys can be **rebound** (Settings → Controls, keyboa
 | Middle mouse | right stick press | strafe |
 | RMB (hold) | LT (hold) | aim |
 | E | Y | ring a bell (rest, checkpoint) · challenge a keeper at a shrine gate |
+| M | D-pad left | **the valley map** (pauses): the whole valley, every keeper and bell, where you are; pick the keeper to **track** (↑/↓ + Enter, or click it) · wheel / LT RT zoom · drag / right stick pan · M, Esc or B closes |
+
+While exploring, every keeper still standing has a compass mark and, when it is off screen, an arrow at the screen's
+edge with its name and distance. The **tracked** keeper — the current objective (the nearest open keeper; the final gate
+once it opens) unless you picked another on the map — pulses, keeps a mark on screen at any distance, and is named under
+the objective ("Tracking: … m"). Fallen keepers drop off.
 
 **Fighting** (a keeper's duel, or the arena)
 
@@ -89,7 +97,8 @@ camera shake (also turns off the hit kick), show the tutorial again.
 
 **Console** (`~`): `hw.Reset [seed]` · `hw.Tier pathbreaker|hellwalker` · `hw.InjectParry <frames>` (A3) ·
 `hw.Autoplay <kind> [skill]` · `hw.Debug` · `hw.Blind` · `hw.ResetModel` (the keepers forget you) · `hw.Menu <page>` ·
-`hw.Shot` · `hw.Photo player|boss|off [yaw dist height]` · `hw.Blade <0|1|2> <pitch yaw roll> [x y z]`.
+`hw.Map [open|close|track <0|1|2|auto>|zoom <1-4>]` (open world) · `hw.Shot` · `hw.Photo player|boss|off [yaw dist height]` ·
+`hw.Blade <0|1|2> <pitch yaw roll> [x y z]`.
 
 ## The open world
 
@@ -101,6 +110,7 @@ camera shake (also turns off the hit kick), show the tutorial again.
 | **Keepers** | the Ninefold Warden (Sevarog, the Warden script) · the Monkey Sage (Wukong, the Sage script) · the Warden, Returned — reborn in stone (the Stone Golem; the final shrine — sealed until the other two fall; always reads you). |
 | **The Crossroads** | a hamlet around the central bell (`HWSettlement.cpp`, the Desert City kit): mud-brick houses facing the bell with the roads left open, a market of fabric stalls, fire pits, chimney smoke, great rocks around it (its plaza is flattened to 36 m). |
 | **Fire and smoke** | Niagara Examples: fire on logs in the bells' braziers (lit when you ring them), the pits and the shrines' sconces (out when the seal breaks); smoke rising behind every shrine whose keeper lives; a teleport-in as Soul wakes and as both fighters enter a duel; the loser of a duel shatters into embers. |
+| **Map** | M: the valley from above — a 1024² picture rendered once per world from `FHWWorldGen` (ground colour, paths and plazas, hill shading, 20 m contours) on a pool thread (~1 s, never on the game thread), drawn with Canvas; the keepers, bells and you over it. The pure parts (projection, the zoomed view, edge-indicator placement, the tracking rule) are `HWMap` (tests `Project.HellwalkerRL.Map.*`). |
 | **Flow** | E at a shrine's gate: the explorer steps out, the duel runs on the plaza, and when it ends you step back into the world. Every keeper reads the same you: the RL keeper's memory is shared across the whole walk. Die: you wake again (at your bell, or — during the build phase — at the next keeper's gate). |
 | **Modes** | Pathbreaker (scripted keepers, the final one still reads you) · Hellwalker · **66 Days** (66 lives; when the last day passes, the save is erased). Progress is saved at bells and shrines (`UHWSaveGame`); the keepers' memory of you is not — they forget you when you quit. |
 | **Build phase** | new games and deaths put you just outside the next keeper's gate. `-HWSpawnAtBell` restores the bells. |
@@ -209,11 +219,16 @@ like itself:
 
 | keeper (shrine, look) | style | what the evaluation measures (dmg/min · guard breaks/min · feint bites/min · READs/min) |
 |---|---|---|
-| **the Warden** (Sevarog) | pressure: heavies into your guard | 1541 · **7.1** · 8.0 · 24.8 |
-| **the Sage** (Wukong) | baits: feints and evasions | 1434 · 6.5 · **14.6** · 24.4 |
-| **the Returned** (the stone golem, the Hell Gate) | the reader: fast, exact counters; 25 % more health | 1444 · 3.0 · 3.7 · **53.2** |
+| **the Warden** (Sevarog) | pressure: heavies into your guard | 1508 · **7.5** · 6.6 · 25.3 |
+| **the Sage** (Wukong) | baits: feints and evasions | 1410 · 6.4 · **12.9** · 24.7 |
+| **the Returned** (the stone golem, the Hell Gate) | the reader: fast, exact counters; 25 % more health | 1425 · 3.3 · 2.6 · **51.9** |
 
 ### Difficulty
+
+**Combat, after play (2026-10-03):** the parry window is **12 frames** (0.2 s) before impact, up from 8, and a clean parry
+now buys a breath — the keeper may guard, step or move as soon as its stagger ends but **starts no attack for another
+0.75 s** (~1.1 s from the parry). Every brain plays by these rules (they are the shared core's), and the keeper was
+retrained under them (Results below).
 
 The same network at every difficulty: the skill input slows its eyes (perception 0.1 → 0.27 s), its decisions
 (every 0.1 → 0.2 s), shortens its strings (3 → 1) and doubles the grab / killer cooldowns; Easy and Normal also sample
@@ -225,11 +240,11 @@ the breather below 0.15), so a losing streak walks it down to Easy and wins brin
 
 | difficulty | skill · sampling | keeper dmg/min | taken/min | swings/min | fight (s) |
 |---|---|---|---|---|---|
-| Easy | 0 · T 1.0 · breather | **537** | 275 | 38 | 42 |
-| *Pathbreaker (the script)* | — | *719* | *391* | *64* | *31* |
-| Normal | 0.4 · T 0.6 | 1194 | 166 | 65 | 19 |
-| Hard | 0.75 · greedy | 1316 | 140 | 72 | 17 |
-| Hellwalker | 1 · greedy | 1333 | 153 | 75 | 17 |
+| Easy | 0 · T 1.0 · breather | **524** | 175 | 38 | 43 |
+| *Pathbreaker (the script)* | — | *701* | *441* | *62* | *32* |
+| Normal | 0.4 · T 0.6 | 1121 | 198 | 66 | 20 |
+| Hard | 0.75 · greedy | 1257 | 201 | 72 | 18 |
+| Hellwalker | 1 · greedy | 1322 | 177 | 75 | 17 |
 
 (Mortal fights against held-out habit players and the reference bots, `RL/eval.py` ladder; simulated players almost
 never win, so damage is the measure. The human playtest will tell where the steps really sit.)
@@ -244,6 +259,29 @@ fades in for the fight and **tightens as the keeper pulls ahead** (its health le
 breathing layer comes in when you are close to death. (The first version followed the RL critic's value; review showed
 that value is the normalised *remaining* return, which falls as the keeper closes in on a kill — no win estimate.) Gamepad rumble on hits taken, parries and READs; the camera
 kick on hits honours the accessibility toggle. Scripted checks read the per-duel cue counts from the log.
+
+## The website and the research data
+
+`web/` is the game's website (static, hosted on Render): the download (itch.io), a leaderboard, and a page for every
+player with their skills — parry success, win rate, hit accuracy, dodges, damage — and **the keeper's notebook**: what
+the RL keeper expects them to do against each of its attacks next to what they actually did. It is for the research
+paper's results section, so there is a short survey ("did it feel like it was reading you?", fairness, difficulty, fun)
+and an export to CSV.
+
+There is **no login**. Each copy of the game signs in to Firebase anonymously (invisible: a random id and a made-up
+nickname such as *Ashen Wanderer 4821*) and, after every duel, `UHWTelemetrySubsystem` sends one record (Firestore REST:
+the fight + server-side increments of the player's totals). Offline, fights wait in a save slot and go up later.
+"Open my stats page" (pause or title menu) opens the player's page linked to that copy of the game — only that browser
+can rename, answer the survey or **reset** ("forget everything it learned about me": the player's fights are deleted
+and the totals zeroed). Fights played by the autoplay bot or the tools are never uploaded. The game shows one line
+saying anonymous stats are sent for research. Nothing is sent until `Config/DefaultGame.ini` `[HWTelemetry]` holds a
+Firebase project — setup, step by step, in [web/README.md](web/README.md); the data contract is
+[web/CONTRACT.md](web/CONTRACT.md); the security rules are `web/firebase/firestore.rules`.
+
+Verified end to end against a local mock of the Firebase REST API (`web/dev/mock_firebase.py`): 82 contract checks
+(`web/dev/e2e_test.py`, incl. the attacks the rules must refuse), and the real game uploading to it — two scripted
+fights arrived with the player's totals exactly their sum, a bot fight was refused, a fight played while the server
+was down waited and arrived at the next launch, and the site showed the player linked by the game's token.
 
 ## Training and evaluation
 
@@ -270,60 +308,62 @@ population.
 
 ## Results — the shipped keeper
 
-`Content/HellwalkerRL/RL/hellwalker_rl.hwrl` = `RL/checkpoints/rl2_keepers/keeper_1p17e9.hwrl`: run `rl2_keepers`,
-10⁹ decisions of recurrent PPO from random initialisation with four league rounds (eight exploiters; ~2 h on the RTX
-A5000 + 36 CPU threads), then two fine-tunes — 1.5 × 10⁸ decisions with a floor under the aggression price and a fifth
-league round, then 1.6 × 10⁷ at a fixed price (λ = 2, 40 % reference bots), which closed the last B0 gap —
-1.17 × 10⁹ decisions in all. Report: `RL/reports/keepers_1p17e9.md`.
+`Content/HellwalkerRL/RL/hellwalker_rl.hwrl` = `RL/checkpoints/rl2_newrules2/keeper_1p45e9.hwrl`, 1.45 × 10⁹ decisions
+of recurrent PPO from random initialisation: the 10⁹ run `rl2_keepers` (four league rounds; ~2 h on the RTX A5000 + 36
+CPU threads), two fine-tunes that closed the last B0 gap (1.17 × 10⁹), then — after the combat changes from play — a
+fine-tune under the new rules (`rl2_newrules`, 1.5 × 10⁸) and one more with two league rounds (`rl2_newrules2`,
+1.7 × 10⁸): the new rules opened a hole the league had to close (below). Report: `RL/reports/keepers_1p45e9.md`.
 
 **B0 — the check the reference project had to pass, with the RL keeper as the adaptive arm** (`Tools\Thesis.bat`,
 64 sessions per cell, 20 player profiles × skills, each keeper):
 
 | check | the Warden | the Sage | the Returned |
 |---|---|---|---|
-| harder than the script against every skilled profile | **PASS** — 1.5–4.2× its damage/min | **PASS** — 1.6–3.3× | **PASS** — 1.5–4.1× |
-| aggression floor: swings/min ≥ the script's in the same fights | **PASS** — closest: RhythmParrier 0.5, 61.8 vs 57.9 | **PASS** — 59.9 vs 55.7 | **PASS** — 58.1 vs 50.3 |
-| a masher dies | **PASS** — in 8.9 s (the script: 15.6 s) | **PASS** — 9.0 s (18.0 s) | **PASS** — 17.4 s (15.6 s) |
-| net exchange never worse than the script (5 % tolerance) | **PASS** — worst: RhythmParrier 0.9, 1.41 vs 1.42 | **PASS** | **PASS** |
-
-At 16 sessions per cell the Warden's net exchange against RhythmParrier 0.7–0.9 sits right at the 5 % line and can
-fail on sampling noise; 64 sessions settle it (it passes for all three keepers).
+| harder than the script against every skilled profile | **PASS** — 1.6–6.5× its damage/min | **PASS** — 2.0–4.3× | **PASS** — 1.6–6.6× |
+| aggression floor: swings/min ≥ the script's in the same fights | **PASS** — closest: DodgerLeft 0.9, 74.3 vs 65.1 | **PASS** — 74.0 vs 56.5 | **PASS** — 77.1 vs 65.1 |
+| a masher dies | **PASS** — in 8.6 s (the script: 15.6 s) | **PASS** — 8.8 s (18.0 s) | **PASS** — 16.3 s (15.6 s) |
+| net exchange never worse than the script (5 % tolerance) | **PASS** — worst: RhythmParrier 0.5, 3.91 vs 3.56 | **PASS** | **PASS** |
 
 **The reading test** (`RL/habits.py`, the C++ attack log: 256 held-out sessions per group, clean hits only):
 
 | players who always… | keeper's first 5 attacks | keeper's attacks 21–60 | its clean hit rate |
 |---|---|---|---|
-| parry | DelayedHeavy 54 %, FastSlash 36 % | FastSlash 59 %, DelayedHeavy 36 % | 0.51 → 0.53 |
-| block | DelayedHeavy 55 %, HeavyCleave 22 % | HeavyCleave 60 %, DelayedHeavy 21 % | 0.27 → 0.40 |
-| dodge left | DelayedHeavy 62 %, FastSlash 23 % | HeavyCleave 31 %, FastSlash 23 % | 0.23 → 0.47 |
-| dodge right | DelayedHeavy 57 %, FastSlash 19 % | HeavyCleave 32 %, DelayedHeavy 24 % | 0.20 → 0.44 |
+| parry | FastSlash 57 %, DelayedHeavy 35 % | FastSlash 58 %, DelayedHeavy 29 % | 0.47 → 0.43 |
+| block | DelayedHeavy 46 %, FastSlash 40 % | HeavyCleave 54 %, DelayedHeavy 27 % | 0.32 → 0.43 |
+| dodge left | DelayedHeavy 39 %, FastSlash 26 % | **HeavySweepLeft 53 %**, HeavyCleave 31 % | 0.27 → 0.42 |
+| dodge right | FastSlash 39 %, DelayedHeavy 39 % | FastSlash 37 %, DelayedHeavy 36 % | 0.32 → 0.49 |
 
-It opens with nearly the same play against everyone and diverges toward each habit's answer as the session goes on
-(move-mix divergence between the four groups 0.08 → 0.48 bits). When a player switches habit after 30 keeper swings,
-its hit rate falls 0.49 → 0.31 (its read has gone stale) and recovers to 0.41. Against held-out habit players its hit
-rate rises with the session (attacks 1–5 → 21–60: +0.12 against strong habits). The in-training log shows the read was
-sharpest mid-run (0.73 bits at ~5 × 10⁸ decisions) and traded some of it for pressure as the league's exploiters and the
-aggression floor pushed; the fine-tune was stopped at the checkpoint that passes B0 while keeping the rise (later ones
-flattened it to +0.04).
+It opens much the same against everyone and diverges toward each habit's answer as the session goes on (move-mix
+divergence between the four groups **0.15 → 0.63 bits**, the highest of any keeper here); against left-dodgers it finds
+the left sweep that tracks the dodge. When a player switches habit after 30 keeper swings its hit rate falls
+0.38 → 0.27 (its read has gone stale) and recovers to 0.40. Against held-out habit players its hit rate rises with the
+session (attacks 1–5 → 21–60: 0.63 → 0.70, +0.07 against strong habits). The parrier is the hard case now: the wider
+parry window makes a pure parrier hard to hit at all (0.47 → 0.43).
 
 **Classic vs RL on identical seeded held-out players** (C++, 90 s immortal fights; damage dealt / taken per minute,
 swings per minute, hit rate):
 
 | players | Pathbreaker (script) | Hellwalker (classic tally brain) | Hellwalker (RL) |
 |---|---|---|---|
-| strong habits | 1019 / 498 / 66 / 0.60 | 1216 / 328 / 68 / 0.67 | **1756 / 101 / 83 / 0.74** |
-| near-random | 991 / 577 / 67 / 0.58 | 1144 / 417 / 69 / 0.65 | **1735 / 155 / 80 / 0.72** |
-| habit switchers | 945 / 668 / 67 / 0.55 | 1140 / 497 / 68 / 0.64 | **1866 / 144 / 77 / 0.72** |
-| learning players | 841 / 488 / 66 / 0.51 | 999 / 352 / 68 / 0.58 | **1642 / 117 / 78 / 0.62** |
-| the reference bots | 618 / 262 / 62 / 0.38 | 834 / 224 / 66 / 0.43 | **1212 / 127 / 75 / 0.46** |
+| strong habits | 998 / 492 / 66 / 0.59 | 1169 / 335 / 67 / 0.66 | **1716 / 99 / 81 / 0.73** |
+| near-random | 962 / 594 / 66 / 0.56 | 1127 / 411 / 68 / 0.65 | **1661 / 152 / 81 / 0.75** |
+| habit switchers | 929 / 680 / 66 / 0.55 | 1112 / 492 / 66 / 0.64 | **1843 / 148 / 78 / 0.73** |
+| learning players | 841 / 478 / 65 / 0.51 | 969 / 359 / 66 / 0.57 | **1534 / 145 / 75 / 0.61** |
+| the reference bots | 579 / 349 / 59 / 0.38 | 774 / 214 / 62 / 0.44 | **1197 / 227 / 74 / 0.45** |
 
-**Exploitability (RL-4).** Against the reference bots at skill 0.9 the shipped keeper loses 10 % of fights;
-a **fresh exploiter** trained against it for 4 × 10⁷ decisions (8 minutes) wins **93 %** (exchange 1.5 in health
-fractions, `RL/exploit.py`) — by guard-and-poke: guard 33 % of its decisions, light attacks 17 %, circling left 14 %,
-walking in 13 %. Every league round told the same story: the round's exploiters beat the frozen keeper 87–100 % of the
-time (one 5 %), and the next keeper beat those but not the next fresh ones. The league made it harder to exploit
-(a fresh exploiter against the 10⁹ keeper: 98 %, exchange 2.0) but did not converge; a longer league, or exploiters
-kept in the population at a higher share, is the next step.
+**What the combat changes did, and why it was retrained.** The 1.17 × 10⁹ keeper under the new rules, untouched, was
+~10 % easier and still read players, but failed B0's aggression floor for all three keepers against the rhythm parrier
+(more parries, each now costing it a pause it never trained with). A fine-tune under the new rules fixed B0 (1.28 × 10⁹)
+— but a fresh exploiter then beat it **100 %** with an exchange of **12.5**: parry, punish with heavies through the
+keeper's pause, repeat. The keeper may guard or step during the pause; it had simply never learned to. Two more league
+rounds put that strategy into its population (round exploiters' exchange 33 → 15.6); the shipped keeper takes far
+more care: a fresh exploiter still wins, but its exchange fell to **3.5** (it now takes 387 damage/min where it took 94).
+
+**Exploitability (RL-4).** A fresh exploiter (`RL/exploit.py`, 4 × 10⁷ decisions, ~6 minutes) still beats every keeper
+we trained — 98 % against the 10⁹ keeper (exchange 2.0, close pressure), 93 % against the 1.17 × 10⁹ one (1.5,
+guard-and-poke), 99 % against the shipped one (3.5, parry-and-punish). Each league round closes the hole it is shown
+and leaves the next; the league has not converged. Note that the exploiter's 360 hp against the keeper's 1100 already
+counts in the exchange: these are skilled, single-minded strategies, which is what a determined human may find too.
 
 **Unreal vs the simulator** (`Tools\Parity.bat`, `RL/reports/parity.md`). The same autoplay players fought the same
 keeper in the game's arena and in the training simulator (3 bots × RL / script, 18 Unreal fights per cell). The first
@@ -333,12 +373,13 @@ showed why — equal mean distance, but 8× as many frames within its reach — 
 the duelists' movement made instant and the approach-stop distance shared, 6 of 72 metrics differ (26 before): the RL
 keeper's cells agree within a few percent (damage, swings, hit rate, fight length; move mix ≤ 0.013 bits), and what is
 left is mostly the scripted keeper against the rhythm parrier (likely capsule collision blocking steps the simulator
-lets pass). Details: RL/DESIGN.md §12.
+lets pass). Details: RL/DESIGN.md §12. (Measured with the 1.17 × 10⁹ keeper before the combat changes; the movement fix is
+independent of them.)
 
-**Not yet met:** RL.md's "not a random-player bully" check — against near-random players the RL keeper is ~75 % more
+**Not yet met:** RL.md's "not a random-player bully" check — against near-random players the RL keeper is ~73 % more
 dangerous than the script, not equal: it is stronger against everyone, and its reading shows in *what* it throws, not
-in a smaller margin against random players. The adaptation curve's "dips after a switch" / "reads, not strength" checks
-on the population-average curve fail (the pure-habit reading test above is the measure that separates them). The
+in a smaller margin against random players. The population-average curve's "dips after a switch" / "reads, not
+strength" checks fail (its rise passes; the pure-habit reading test above is the measure that separates them). The
 human playtest (RL-6) is the real judge of difficulty and fairness.
 
 ## Layout
@@ -352,7 +393,8 @@ Source/HellwalkerRL/Public/HWCore, Private/HWCore   engine-free C++ core, compil
     HWEncounter / HWSim                         duel + brain + stats; 2-D arena and simulated players (habit, learning players)
     HWCoreTests / HWRLTests                     the done-tests, also run by ThesisSim
 Source/HellwalkerRL/...        the Unreal layer: duel subsystem, session memory, characters, HUD + menus (HWMenu,
-                               HWSettings), audio (HWAudio), open world, tests
+                               HWSettings), audio (HWAudio), the valley map (HWMap), research telemetry (HWTelemetry),
+                               open world, tests
 Sim/ThesisSim.cpp, SimArms.*   B0: Pathbreaker vs an adaptive arm (the RL keeper, or the classic brain)
 Sim/Classic/                   the reference project's tally brain (playstyle model, payoff table) — tools only
 RL/native/                     the training environment (FRLEnvBatch, the exploiter env FRLPlayerEnv) + the hwrl.dll C ABI
@@ -360,6 +402,8 @@ RL/*.py                        the trainer: hwcore (ctypes), env, players, model
                                exploit (RL-4), parity (Unreal vs simulator)
 RL/tests/                      torch / C++ / ONNX parity
 .github/workflows/ci.yml       CI without Unreal (Tools\CI.bat locally)
+web/                           the website (static) + Firebase rules + the REST mock, e2e test and CSV export (web/README.md)
+render.yaml                    the Render Blueprint for the website
 Content/HellwalkerRL/          the maps and generated materials (written by Tools\MakeMaps.bat), the shipped keeper
 ```
 
@@ -397,7 +441,10 @@ Content/HellwalkerRL/          the maps and generated materials (written by Tool
 9. **The duelists move like the simulator.** Instant acceleration and braking, and one approach-stop distance for both
    — found by the Unreal-vs-simulator measurement: with ordinary character acceleration the keeper's trained spacing
    went soft and the player got into reach 8× as often.
-10. **Packaging.** A packaged game cannot compile shaders, so `Tools\MakeMaps.bat` also saves the code-built
+10. **Combat changes from play, and retraining for them.** The parry window widened (8 → 12 frames) and a parried keeper
+   pauses before its next attack (PLAN §6). Changing the rules changes the environment the keeper was trained in, so it
+   was fine-tuned under them — and the new rules' parry-and-punish loop needed the league to close it (Results).
+11. **Packaging.** A packaged game cannot compile shaders, so `Tools\MakeMaps.bat` also saves the code-built
    materials (`/Game/HellwalkerRL/Materials`) and bakes the instanced-mesh usage into the dressing's pack materials;
    editor-only code is guarded for the Shipping build; cooking bypasses the Zen store (its data lives on the full C:
    drive of the build machine). The keepers' voice lines are cooked one by one (an asset-manager rule), not the
@@ -411,13 +458,14 @@ Content/HellwalkerRL/          the maps and generated materials (written by Tool
 | RL-1 | feed-forward PPO vs one fixed habitual bot | **done** — learns that bot's counters; it also found the killer-spam exploit, now masked |
 | RL-2 | recurrent PPO vs the procedural population | **done** — 10⁹ decisions with the reading test logged during training; play diverges toward each habit's counter; hit rate dips and recovers around a habit switch |
 | RL-3 | constraints and fairness | **done** — all four B0 checks pass for all three keepers (64 sessions); the aggression floor holds per matchup |
-| RL-4 | exploiter league | **done, not converged** — five rounds, ten exploiters in the population, learning players too; a fresh exploiter still finds a winning strategy (above) |
-| RL-5 | inference + the RL brain in Unreal | **done** — `FRLBrain` plays the Hellwalker tier (fallback: the script when the model file is missing); three keepers, five difficulties, the notebook, menus, sound; the Unreal-vs-simulator gap measured (above); the Shipping .exe |
-| RL-6 | human playtest (B4) | **yours** — `Tools\Arena.bat -HWBlind` labels the tiers Variant A / B; F3 shows the keeper's reasoning; the notebook shows what it learned |
+| RL-4 | exploiter league | **done, not converged** — seven rounds, fourteen exploiters in the population, learning players too; each round closes the hole it is shown (the parry-and-punish exchange 12.5 → 3.5), but a fresh exploiter still finds a winning strategy (above) |
+| RL-5 | inference + the RL brain in Unreal | **done** — `FRLBrain` plays the Hellwalker tier (fallback: the script when the model file is missing); three keepers, five difficulties, the notebook, menus, sound, the valley map with keeper tracking; the Unreal-vs-simulator gap measured (above); anonymous research telemetry + the website; the Shipping .exe |
+| RL-6 | human playtest (B4) | **yours** — the website collects it: every player's fights, what the keeper learned, and the survey; `Tools\Arena.bat -HWBlind` labels the tiers Variant A / B |
 
-Tests: `Tools\Thesis.bat` (35 core tests: combat, the script, the RL keeper incl. skill, learning players, the
-notebook and the Easy breather, the classic benchmark), `Tools\Test.bat` (47 Unreal automation tests: core and RL
-wrappers, the shipped model, menus and settings, keepers and difficulty, the music's tension, world generation,
-animation casts), `RL\.venv\Scripts\python.exe RL\tests\test_parity.py` (torch vs C++ vs ONNX),
+Tests: `Tools\Thesis.bat` (36 core tests: combat incl. the parry window and the post-parry pause, the script, the RL
+keeper incl. skill, learning players, the notebook and the Easy breather, the classic benchmark), `Tools\Test.bat` (59
+Unreal automation tests: core and RL wrappers, the shipped model, menus and settings, keepers and difficulty, the
+music's tension, world generation, the valley map and keeper tracking, the research telemetry, animation casts),
+`web/dev/e2e_test.py` (82 checks of the website's data contract and security rules against the mock), `RL\.venv\Scripts\python.exe RL\tests\test_parity.py` (torch vs C++ vs ONNX),
 `RL\native\out\envbench.exe` (throughput, determinism, masks, rollover, attack log), `Tools\CI.bat` (all of the
 engine-free ones, as GitHub Actions runs them).

@@ -426,3 +426,50 @@ Remaining known differences: capsules collide (the simulator lets a ghoststep pa
 apart otherwise; the capsules are 38 + 55 = 93 cm and always solid); the Unreal autoplay walk is forward-only (the bot
 never strafes, so this is equal today). Experiment switches: `-HWMoveAccel=`, `-HWMoveBraking=`, `-HWNoHitstop`
 (`parity.py --ue-arg=...`).
+
+## 13. Combat changes from play (2026-10-03) and the 1.28 × 10⁹ keeper
+
+Play said the game was too hard. Two rules in the shared core (`FCombatTuning`, PLAN §6), applied to every brain:
+the parry window is **12 frames** before impact (was 8), and after a successful parry the keeper starts **no attack
+until `ParryAttackLockout` = 45 frames after its stun ends** (~1.1 s from the parry; it may guard, step and move —
+`FFighter::NoAttackUntil`, checked in `FDuel::CanCommit`, so the RL keeper's mask inherits it; not observed). Tests:
+`A3.ParryWindow` (13 before impact fails, 12 parries — on HeavyCleave, slow enough to press that early),
+`A3.ParryLockout`.
+
+The 1.17 × 10⁹ keeper under the new rules (no retraining): ~10 % less damage (reference bots 1094 vs 1212 dmg/min), its
+reading intact (0.09 → 0.44 bits), but B0's aggression floor FAILED for all three keepers against the rhythm parrier
+(44-49 vs the script's 47-53 swings/min: more parries, and each now costs it a pause it never trained with). So it was
+fine-tuned under the new rules (`rl2_newrules`: resume from `keeper_1p17e9.pt`, 1.5 × 10⁸ decisions, λ floor 1.0, 40 %
+reference bots; the requested extra league round did not run — the resumed league schedule was spent) and the
+checkpoints scanned as before. First shipped: **`keeper_1p28e9`** (ckpt 2450), the one passing all four B0 checks for all three
+keepers at 64 sessions (ckpt 2300 failed the Returned's net exchange) and reading best: move-mix divergence 0.06 → 0.61
+bits (the highest yet), style checks all pass, ladder monotone with Easy (505) below the script (701). It deals about
+what the old keeper did (reference bots 1182 dmg/min, ladder top 1310) but takes far more risk — players deal it 2.4×
+the damage (258 vs 105 / min) — so fights are more two-sided than before the change. The population curve's rise fell
+again (0.14 for the old keeper under the new rules → 0.02): the fine-tune strengthens the opener (first-5-attack hit
+rate 0.56 → 0.67) while the late hit rate stays ~0.70; the pure-habit reading test is the measure that grew.
+Report: `RL/reports/keepers_1p28e9.md`.
+
+**Then the league again (`rl2_newrules2`).** A fresh exploiter against `keeper_1p28e9` won 100 % with an exchange of
+12.5 (guard / hold 39 %, parry 6 %, heavies and lights 13 %): parry, then punish through the keeper's 45-frame pause —
+during which the keeper could have guarded or stepped away, but had never learned to (it does not observe the pause; the
+mask only forbids attacks). Two league rounds were added to a resumed run (the resumed league skips rounds whose index
+already has exploiters, so `--league-at` listed seven fractions: five done, two new at 0.905 and 0.95 of 1.45 × 10⁹):
+round 5's exploiters reached exchanges 33.2 and 4.2, round 6's (against the keeper that had trained on round 5) 15.6
+and 5.1. Shipped: **`keeper_1p45e9`** (ckpt 2766): all four B0 checks pass for all three keepers at 64 sessions; the
+population curve's rise is back (0.63 → 0.70, `rises_on_habits` PASS); reading 0.15 → 0.63 bits; styles and ladder pass
+(Easy 524 vs the script's 701); a fresh exploiter still wins 99 % but at exchange 3.5 (it takes 387 damage/min, was 94).
+Report: `RL/reports/keepers_1p45e9.md`.
+
+A third review (2026-10-03, two reviewers over the telemetry uploader, the world map and the website, each finding
+re-checked by a verifier; 17 confirmed) and the fixes: fights touched by a tool (hw.Kill, hw.InjectParry, hw.Hold, the
+bot) or a scripted launch (-unattended, -HWExec) are no longer uploaded as research data; a fight's notebook numbers are
+measured from a snapshot at its start (abandoned fights and a reset memory no longer leak into the next record), and the
+record waits for the frame's READ (a READ on the killing blow counts for that fight); the difficulty is the one the fight
+began at; queued fights carry `{uid}` (a new identity adopts them) and only the specific "account gone" errors wipe the
+identity (not a bad or rotated API key); only ALREADY_EXISTS counts as delivered, and a 400/403 on a commit reads the
+fight back before retrying or dropping; test launches use their own save slot and other projects' queued fights are kept,
+not deleted; fights queued before a reset on the website are dropped; the stats link opens without the engine logging
+its token. Rules: every lifetime counter (and each keeper's record) may grow by at most one fight's worth per write, not
+only `totals.fights` (mirrored in the mock; two new attack checks, 82 in all). Docs: the API-key restriction must include
+the Token Service API; itch.io's default upload cap; the read quota; CSV export guarded against formula injection.

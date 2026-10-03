@@ -82,6 +82,7 @@ FKey FHWBindingTable::DefaultKey(EHWBind Action)
 	case EHWBind::Pause:    return EKeys::P;
 	case EHWBind::Notebook: return EKeys::N;
 	case EHWBind::Interact: return EKeys::E;
+	case EHWBind::Map:      return EKeys::M;
 	default:                return EKeys::Invalid;
 	}
 }
@@ -102,6 +103,7 @@ FKey FHWBindingTable::GamepadKey(EHWBind Action)
 	case EHWBind::Pause:    return EKeys::Gamepad_Special_Right;
 	case EHWBind::Notebook: return EKeys::Gamepad_DPad_Down;
 	case EHWBind::Interact: return EKeys::Gamepad_FaceButton_Top;
+	case EHWBind::Map:      return EKeys::Gamepad_DPad_Left;  // the arena's tier key, never mapped while exploring
 	default:                return EKeys::Invalid; // Restart: the pause menu
 	}
 }
@@ -123,6 +125,7 @@ FString FHWBindingTable::GamepadLabel(EHWBind Action)
 	case EHWBind::Pause:    return TEXT("Start");
 	case EHWBind::Notebook: return TEXT("D-pad down");
 	case EHWBind::Interact: return TEXT("Y");
+	case EHWBind::Map:      return TEXT("D-pad left");
 	default:                return TEXT("-");
 	}
 }
@@ -144,6 +147,7 @@ FString FHWBindingTable::ActionLabel(EHWBind Action)
 	case EHWBind::Pause:    return TEXT("Pause menu");
 	case EHWBind::Notebook: return TEXT("The keeper's notebook");
 	case EHWBind::Interact: return TEXT("Ring a bell / challenge");
+	case EHWBind::Map:      return TEXT("The valley map");
 	default:                return TEXT("?");
 	}
 }
@@ -152,7 +156,8 @@ EHWBindScope FHWBindingTable::Scope(EHWBind Action)
 {
 	switch (Action)
 	{
-	case EHWBind::Interact: return EHWBindScope::Explore;
+	case EHWBind::Interact:
+	case EHWBind::Map:      return EHWBindScope::Explore;
 	case EHWBind::Help:
 	case EHWBind::Debug:
 	case EHWBind::Pause:
@@ -289,13 +294,47 @@ TArray<FHWKeyBinding> FHWBindingTable::ToArray() const
 	return Out;
 }
 
+bool FHWBindingTable::Fits(EHWBind Action, const FKey& Key) const
+{
+	FString Why;
+	if (!IsBindable(Key, Scope(Action), Why)) { return false; }
+	for (int32 J = 0; J < Num; ++J)
+	{
+		if (J != static_cast<int32>(Action) && Keys[J] == Key && Overlap(Scope(Action), Scope(static_cast<EHWBind>(J)))) { return false; }
+	}
+	return true;
+}
+
 void FHWBindingTable::FromArray(const TArray<FHWKeyBinding>& In)
 {
 	FHWBindingTable Next;
+	bool bSaved[Num] = {};
 	for (const FHWKeyBinding& B : In)
 	{
 		const int32 I = static_cast<int32>(B.Action);
-		if (I >= 0 && I < Num && B.Key.IsValid()) { Next.Keys[I] = B.Key; }
+		if (I >= 0 && I < Num && B.Key.IsValid())
+		{
+			Next.Keys[I] = B.Key;
+			bSaved[I] = true;
+		}
+	}
+	// Migration: an action the save does not know (added since) keeps its default unless the player's keys took it.
+	static const FKey Fallbacks[] = { EKeys::M, EKeys::K, EKeys::L, EKeys::J, EKeys::U, EKeys::I, EKeys::O, EKeys::G, EKeys::H,
+		EKeys::T, EKeys::Y, EKeys::B, EKeys::V, EKeys::X, EKeys::Z, EKeys::F2, EKeys::F4, EKeys::F5, EKeys::F6, EKeys::F7, EKeys::F8 };
+	for (int32 I = 0; I < Num; ++I)
+	{
+		const EHWBind A = static_cast<EHWBind>(I);
+		if (bSaved[I] || Next.Fits(A, Next.Keys[I])) { continue; }
+		for (const FKey& K : Fallbacks)
+		{
+			if (Next.Fits(A, K))
+			{
+				UE_LOG(LogHellwalkerRL, Log, TEXT("Settings: the saved bindings predate %s and hold its key %s; it takes %s."), *ActionLabel(A),
+					*KeyLabel(Next.Keys[I]), *KeyLabel(K));
+				Next.Keys[I] = K;
+				break;
+			}
+		}
 	}
 	if (Next.IsValid())
 	{

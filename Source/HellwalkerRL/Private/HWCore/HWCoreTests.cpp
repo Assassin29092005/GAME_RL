@@ -144,7 +144,7 @@ namespace HW
 		}
 
 		// ------------------------------------------------------------------------------------------
-		// A3 — console-injected press at an exact frame offset: 9 before impact fails, 7 succeeds
+		// A3 — console-injected press at an exact frame offset: 13 before impact fails, 11 succeeds (12-frame window)
 		// ------------------------------------------------------------------------------------------
 		bool TestA3ParryWindow(std::string& Log)
 		{
@@ -152,15 +152,15 @@ namespace HW
 			FFixedOracle Oracle;
 			struct FCase { int32_t Offset; EHitOutcome Expect; };
 			const FCase Cases[] = {
-				{ 10, EHitOutcome::Hit }, { 9, EHitOutcome::Hit }, { 8, EHitOutcome::Parried }, { 7, EHitOutcome::Parried },
-				{ 4, EHitOutcome::Parried }, { 1, EHitOutcome::Parried }, { 0, EHitOutcome::Hit },
+				{ 14, EHitOutcome::Hit }, { 13, EHitOutcome::Hit }, { 12, EHitOutcome::Parried }, { 11, EHitOutcome::Parried },
+				{ 8, EHitOutcome::Parried }, { 4, EHitOutcome::Parried }, { 1, EHitOutcome::Parried }, { 0, EHitOutcome::Hit },
 			};
 			for (const FCase& C : Cases)
 			{
 				FDuel Duel;
 				Duel.Reset();
-				Duel.Commit(ESide::Boss, EMoveId::BFastSlash);
-				const int32_t Impact = Move(EMoveId::BFastSlash).Startup; // duel frame of first contact
+				Duel.Commit(ESide::Boss, EMoveId::BHeavyCleave);
+				const int32_t Impact = Move(EMoveId::BHeavyCleave).Startup; // duel frame of first contact (slow enough to press 14 early)
 				StepFrames(Duel, Oracle, Impact - C.Offset);
 				Duel.Commit(ESide::Player, EMoveId::PParry);
 				const EHitOutcome O = StepUntilBossOutcome(Duel, Oracle, 60);
@@ -168,6 +168,36 @@ namespace HW
 				Logf(Log, "parry pressed %2d frames before impact -> %-8s %s", C.Offset, OutcomeName(O), bPass ? "ok" : "WRONG");
 				bOk = bOk && (bPass);
 			}
+			return bOk;
+		}
+
+		// A3 — after a parry the keeper may guard, step or move as soon as its stagger ends, but starts no attack until
+		// ParryAttackLockout frames later
+		bool TestA3ParryLockout(std::string& Log)
+		{
+			const FCombatTuning& K = Tuning();
+			FFixedOracle Oracle;
+			FDuel Duel;
+			Duel.Reset();
+			Duel.Commit(ESide::Boss, EMoveId::BFastSlash);
+			const int32_t Impact = Move(EMoveId::BFastSlash).Startup;
+			StepFrames(Duel, Oracle, Impact - 4);
+			Duel.Commit(ESide::Player, EMoveId::PParry);
+			const EHitOutcome O = StepUntilBossOutcome(Duel, Oracle, 60);
+			const int32_t ParryFrame = Duel.Frame;
+			int32_t FreeAt = -1, AttackAt = -1;
+			bool bGuardWhileLocked = false;
+			for (int32_t F = 0; F < 300 && AttackAt < 0; ++F)
+			{
+				const FFighter& B = Duel.Get(ESide::Boss);
+				if (FreeAt < 0 && B.IsActionable()) { FreeAt = Duel.Frame; bGuardWhileLocked = Duel.CanCommit(ESide::Boss, EMoveId::BGuard); }
+				if (Duel.CanCommit(ESide::Boss, EMoveId::BFastSlash)) { AttackAt = Duel.Frame; break; }
+				StepFrames(Duel, Oracle, 1);
+			}
+			const bool bOk = O == EHitOutcome::Parried && FreeAt >= 0 && bGuardWhileLocked && AttackAt - FreeAt >= K.ParryAttackLockout - 1
+				&& AttackAt - FreeAt <= K.ParryAttackLockout + 1;
+			Logf(Log, "parried at frame %d (%s): the keeper is free at %d (guard allowed: %s), may attack again at %d (+%d frames; lockout %d)",
+				ParryFrame, OutcomeName(O), FreeAt, bGuardWhileLocked ? "yes" : "NO", AttackAt, AttackAt - FreeAt, K.ParryAttackLockout);
 			return bOk;
 		}
 
@@ -314,6 +344,7 @@ namespace HW
 			{ "A1.FourOutcomes",              "A1", &TestA1FourOutcomes },
 			{ "A1.InterruptedSwingWhiffsOnce","A1", &TestA1InterruptedSwingWhiffsOnce },
 			{ "A3.ParryWindow",               "A3", &TestA3ParryWindow },
+			{ "A3.ParryLockout",              "A3", &TestA3ParryLockout },
 			{ "A3.GuardBreak",                "A3", &TestA3GuardBreak },
 			{ "B1.Determinism",               "B1", &TestB1Determinism },
 			{ "B1.ControlIgnoresOutcome",     "B1", &TestB1ControlIgnoresOutcome },

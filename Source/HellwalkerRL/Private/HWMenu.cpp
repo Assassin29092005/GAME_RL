@@ -435,7 +435,9 @@ namespace HWTutorial
 		       "The keeper's notebook (in the pause menu) shows what it has written down about you.") },
 		{ TEXT("DIFFICULTY, AND THREE KEEPERS"),
 		  TEXT("At lower difficulty it sees you later and strikes fewer times in a row. Adaptive changes its strength between fights to "
-		       "keep them close. The Warden, the Sage and the Returned each fight their own way - but all three read the same you.") },
+		       "keep them close. The Warden, the Sage and the Returned each fight their own way - but all three read the same you. "
+		       "A clean parry stuns it and buys you a breath before it can strike again.\n\n"
+		       "Anonymous gameplay stats are sent for research. See or reset yours on the website.") },
 	};
 
 	int32 NumSlides() { return UE_ARRAY_COUNT(GSlides); }

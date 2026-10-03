@@ -4,6 +4,7 @@
 #include "HWBuild.h"
 #include "HWDressing.h"
 #include "HWGlowMaterial.h"
+#include "Async/Async.h"
 #include "Async/ParallelFor.h"
 #include "Components/DirectionalLightComponent.h"
 #include "Components/ExponentialHeightFogComponent.h"
@@ -83,6 +84,19 @@ void AHWOpenWorld::Build(int32 Seed)
 	Fog->SetFogInscatteringColor(FLinearColor(0.16f, 0.09f, 0.1f));
 	Fog->SetStartDistance(2500.f);
 	SkyLight->RecaptureSky();
+
+	// The valley map's picture: ~0.3 s of terrain sampling, on a pool thread so that it never hitches the game. The task
+	// gets its own copy of the (pure, small) generator; the HUD makes a texture of the picture once bReady is set.
+	MapPicture = MakeShared<HWMap::FPicture, ESPMode::ThreadSafe>();
+	MapPicture->Size = HWMap::PictureSize;
+	Async(EAsyncExecution::ThreadPool, [Gen = *Generator, Picture = MapPicture]()
+	{
+		const double Start = FPlatformTime::Seconds();
+		HWMap::RenderPicture(Gen, Picture->Size, Picture->Pixels);
+		Picture->bReady = true;
+		UE_LOG(LogHellwalkerRL, Log, TEXT("Valley map: %d x %d picture rendered in %.2f s (off the game thread)."), Picture->Size, Picture->Size,
+			FPlatformTime::Seconds() - Start);
+	});
 
 	BuildSeconds = FPlatformTime::Seconds() - T0;
 	UE_LOG(LogHellwalkerRL, Display, TEXT("Open world (seed %d): %d terrain triangles, %d scattered, %d traversable blocks, built in %.2f s."),

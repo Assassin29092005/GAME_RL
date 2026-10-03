@@ -4,8 +4,12 @@
 // player action with a confidence bar, flashed immediately AFTER a model-driven counter lands —
 // testimony, not telegraph; held for the player's "READ banner hold" setting), impact flashes, the killer-move
 // telegraph marker, start / end screens, the A2 numeric overlay (F3) that the CSV must reconcile against — and the
-// menus (title, pause, settings, the tutorial, the keeper's notebook), drawn from AHWPlayerController's FHWMenu with
-// mouse hit boxes ("M:I:<row>" and friends, see AHWPlayerController::MenuPointer).
+// menus (title, pause, settings, the tutorial, the keeper's notebook, the valley map), drawn from AHWPlayerController's
+// FHWMenu with mouse hit boxes ("M:I:<row>" and friends, see AHWPlayerController::MenuPointer).
+//
+// Exploring: the compass, the objective, and keeper tracking — every standing keeper gets an arrow at the screen's edge
+// when it is off screen (HWMap::PlaceEdgeMarker), and the tracked one (AHWOpenWorldGameMode::GetTrackedKeeper) pulses,
+// keeps a mark on screen at any distance and a "Tracking:" line under the objective.
 //
 // Everything is laid out in 1080p reference units times the player's HUD scale (UHWSettingsSubsystem::GetHudScale).
 
@@ -18,6 +22,7 @@
 
 class UHWDuelSubsystem;
 class UFont;
+class UTexture2D;
 class AHWOpenWorldGameMode;
 class AHWPlayerController;
 class FHWMenu;
@@ -59,6 +64,11 @@ private:
 	void DrawTitle(AHWOpenWorldGameMode* GM);
 	void DrawExplore(AHWOpenWorldGameMode* GM);
 	void DrawCompass(AHWOpenWorldGameMode* GM);
+	/**
+	 * The standing keepers' screen-edge arrows (off screen) and the tracked keeper's mark (on screen, any distance). The
+	 * arrows sit inside the insets; their labels stack away from the Avoid boxes and from each other.
+	 */
+	void DrawKeeperTracking(AHWOpenWorldGameMode* GM, float TopInset, float BottomInset, const TArray<FBox2D>& Avoid);
 	void DrawDuelResult(AHWOpenWorldGameMode* GM, UHWDuelSubsystem* Duel);
 	void DrawEnding(AHWOpenWorldGameMode* GM, UHWDuelSubsystem* Duel, bool bRegret);
 	void DrawBanner(AHWOpenWorldGameMode* GM);
@@ -70,6 +80,10 @@ private:
 	void DrawSettingsMenu(AHWPlayerController* PC, const FHWMenu& M);
 	void DrawTutorial(AHWPlayerController* PC, const FHWMenu& M);
 	void DrawNotebookMenu(AHWPlayerController* PC, const FHWMenu& M);
+	/** The valley map: the picture, bells, keepers (click one to track it), you; the keeper list and the legend beside it. */
+	void DrawMapMenu(AHWPlayerController* PC, const FHWMenu& M);
+	/** The map picture as a texture, made once from AHWOpenWorld::GetMapPicture (null until the picture is ready). */
+	UTexture2D* GetMapTexture(const AHWOpenWorldGameMode* GM);
 	/** One line from the notebook (and the adaptive change) on the duel result / end screens. */
 	void DrawNotebookLine(UHWDuelSubsystem* Duel, float CX, float Y);
 	void DrawConfirm(AHWPlayerController* PC, const FHWMenu& M);
@@ -82,6 +96,16 @@ private:
 	void DrawMenuFooter(AHWPlayerController* PC, const FHWMenu& M, float X, float Y, float W, bool bCenter);
 	void Panel(float X, float Y, float W, float H);
 	void Outline(float X, float Y, float W, float H, const FLinearColor& C, float T);
+
+	// Filled shapes (canvas triangles) for the map and the indicators.
+	void FillTriangle(const FVector2D& A, const FVector2D& B, const FVector2D& C, const FLinearColor& Color);
+	void FillDiamond(const FVector2D& At, float R, const FLinearColor& Color);
+	void FillCircle(const FVector2D& At, float R, const FLinearColor& Color);
+	void RingCircle(const FVector2D& At, float R, const FLinearColor& Color, float Thickness);
+	/** A keeper's icon: a diamond in its colour, a bar across it while sealed, crossed out once cleared. */
+	void KeeperIcon(const FVector2D& At, float R, bool bCleared, bool bSealed);
+	/** Text with a dark drop shadow (over the map picture or the world). */
+	void ShadowText(const FString& S, float X, float Y, const FLinearColor& C, UFont* Font, float Scale, bool bCenter = false);
 
 	void Bar(float X, float Y, float W, float H, float Fraction, const FLinearColor& Fill, const FLinearColor& Back);
 	void Text(const FString& S, float X, float Y, const FLinearColor& C, UFont* Font, float Scale = 1.f, bool bCenter = false);
@@ -101,4 +125,6 @@ private:
 	bool bReadShown = false;
 	double ReadShownAt = 0.0;
 	float ReadLastAlpha = 0.f;
+
+	UPROPERTY() TObjectPtr<UTexture2D> MapTexture;
 };

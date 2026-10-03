@@ -60,7 +60,7 @@ namespace
 
 	FAutoConsoleCommandWithWorldAndArgs GHWInjectParry(
 		TEXT("hw.InjectParry"),
-		TEXT("hw.InjectParry <frames> - press parry exactly <frames> before the next boss swing's impact (A3: 9 fails, 7 succeeds)."),
+		TEXT("hw.InjectParry <frames> - press parry exactly <frames> before the next boss swing's impact (A3: 13 fails, 11 succeeds)."),
 		FConsoleCommandWithWorldAndArgsDelegate::CreateLambda([](const TArray<FString>& Args, UWorld* World)
 		{
 			if (UHWDuelSubsystem* D = DuelOf(World)) { D->InjectParry(Args.Num() > 0 ? FCString::Atoi(*Args[0]) : 7); }
@@ -108,6 +108,14 @@ namespace
 			if (PC == nullptr || Args.Num() == 0) { return; }
 			const int32 Repeat = Args.Num() > 1 ? FMath::Clamp(FCString::Atoi(*Args[1]), 1, 50) : 1;
 			for (int32 I = 0; I < Repeat; ++I) { PC->MenuCommand(Args[0]); }
+		}));
+
+	FAutoConsoleCommandWithWorldAndArgs GHWMap(
+		TEXT("hw.Map"),
+		TEXT("hw.Map [open|close|track <0|1|2|auto>|zoom <1-4>] - open world: the valley map (no argument toggles it) and the tracked keeper (scripted checks)."),
+		FConsoleCommandWithWorldAndArgsDelegate::CreateLambda([](const TArray<FString>& Args, UWorld* World)
+		{
+			if (AHWPlayerController* PC = MenuController(World)) { PC->MapConsole(Args); }
 		}));
 
 	FAutoConsoleCommandWithWorldAndArgs GHWResetModel(
@@ -289,7 +297,6 @@ namespace
 		TEXT("hw.Hold <IA_Name> <seconds> [x y] - press an input action as the player (e.g. hw.Hold IA_Move 3 0 1, hw.Hold IA_Crouch 0.1)."),
 		FConsoleCommandWithWorldAndArgsDelegate::CreateLambda([](const TArray<FString>& Args, UWorld* World)
 		{
-			(void)World;
 			if (Args.Num() < 1) { return; }
 			const FString Name = Args[0];
 			UInputAction* Action = LoadObject<UInputAction>(nullptr, *FString::Printf(TEXT("/Game/Input/%s.%s"), *Name, *Name));
@@ -298,6 +305,7 @@ namespace
 			const bool bAxis = Args.Num() > 3;
 			const FVector2D Axis = bAxis ? FVector2D(FCString::Atof(*Args[2]), FCString::Atof(*Args[3])) : FVector2D::ZeroVector;
 			FHWAutomation::Hold(Action, Seconds, bAxis, Axis);
+			if (UHWDuelSubsystem* D = DuelOf(World)) { D->MarkNotResearch(TEXT("hw.Hold pressed input")); }
 		}));
 
 	FAutoConsoleCommandWithWorldAndArgs GHWWhere(
@@ -309,8 +317,9 @@ namespace
 			const APlayerController* PC = World != nullptr ? World->GetFirstPlayerController() : nullptr;
 			const APawn* P = PC != nullptr ? PC->GetPawn() : nullptr;
 			if (P == nullptr) { return; }
-			UE_LOG(LogHellwalkerRL, Display, TEXT("Where: %s at (%.0f, %.0f, %.0f), speed %.0f cm/s (vertical %.0f)"), *P->GetClass()->GetName(),
-				P->GetActorLocation().X, P->GetActorLocation().Y, P->GetActorLocation().Z, P->GetVelocity().Size2D(), P->GetVelocity().Z);
+			UE_LOG(LogHellwalkerRL, Display, TEXT("Where: %s at (%.0f, %.0f, %.0f), speed %.0f cm/s (vertical %.0f), facing yaw %.0f, camera yaw %.0f"), *P->GetClass()->GetName(),
+				P->GetActorLocation().X, P->GetActorLocation().Y, P->GetActorLocation().Z, P->GetVelocity().Size2D(), P->GetVelocity().Z, P->GetActorRotation().Yaw,
+				PC->GetControlRotation().Yaw);
 		}));
 
 	FAutoConsoleCommandWithWorldAndArgs GHWControls(

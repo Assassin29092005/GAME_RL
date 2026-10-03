@@ -1,0 +1,52 @@
+# Render Blueprint: the HellwalkerRL website (web/) as a static site. Render -> New -> Blueprint -> this repo.
+# No build step: Render requires a buildCommand for every non-Docker service, so it is a no-op echo and the files in
+# web/ are published as they are. Only changes under web/ trigger a deploy (the game's commits do not).
+services:
+  - type: web
+    name: hellwalker-site
+    runtime: static
+    buildCommand: echo "HellwalkerRL site - static files, no build step"
+    staticPublishPath: ./web
+    buildFilter:
+      paths:
+        - web/**
+      ignoredPaths:
+        - web/dev/**
+        - web/firebase/**
+    headers:
+      # No build step = no hashed file names, so every file is revalidated (cheap: ETag / 304) and a deploy is never
+      # half-cached (an old module next to a new one).
+      - path: /*
+        name: Cache-Control
+        value: no-cache
+      # Scripts only from this site; data only from Firebase (and a local mock for ?mock= testing; browsers allow an
+      # https page to call http://127.0.0.1); fonts from Google.
+      - path: /*
+        name: Content-Security-Policy
+        value: "default-src 'self'; script-src 'self'; style-src 'self' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self' https://identitytoolkit.googleapis.com https://securetoken.googleapis.com https://firestore.googleapis.com http://127.0.0.1:* http://localhost:*; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
+      - path: /*
+        name: X-Content-Type-Options
+        value: nosniff
+      - path: /*
+        name: X-Frame-Options
+        value: DENY
+      - path: /*
+        name: Referrer-Policy
+        value: strict-origin-when-cross-origin
+      - path: /*
+        name: Permissions-Policy
+        value: "camera=(), microphone=(), geolocation=(), payment=(), usb=()"
+      - path: /*
+        name: Strict-Transport-Security
+        value: max-age=31536000
+      - path: /*
+        name: Cross-Origin-Opener-Policy
+        value: same-origin
+    routes:
+      # The development tools and the Firebase config are in web/ but are not part of the site.
+      - type: redirect
+        source: /dev/*
+        destination: /
+      - type: redirect
+        source: /firebase/*
+        destination: /

@@ -7,6 +7,7 @@
 //   Project.HellwalkerRL.Menu.Capture         a binding waits for a key; Back cancels; read-only bindings refuse
 //   Project.HellwalkerRL.Menu.Tutorial        the slide deck opens on Next, turns pages, and ends with SlidesDone
 //   Project.HellwalkerRL.Settings.Bindings    defaults are valid; bind, swap on a clash, refuse reserved / pad keys
+//   Project.HellwalkerRL.Settings.Migration   a save from before the map key loads: Map gets M, or a free key if M was taken
 //   Project.HellwalkerRL.Settings.Data        sanitising clamps; the difficulty -> keeper skill table
 //   Project.HellwalkerRL.Settings.SaveRoundTrip  a settings save written and read back is the same
 
@@ -267,6 +268,46 @@ bool FHWSettingsBindingsTest::RunTest(const FString& Parameters)
 		}
 		return true;
 	}());
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FHWSettingsMigrationTest, "Project.HellwalkerRL.Settings.Migration", HWMenuTestFlags)
+
+bool FHWSettingsMigrationTest::RunTest(const FString& Parameters)
+{
+	(void)Parameters;
+	const FHWBindingTable Defaults;
+	TestTrue(TEXT("the map is on M / D-pad left, explore-only"), Defaults.Get(EHWBind::Map) == EKeys::M && FHWBindingTable::GamepadKey(EHWBind::Map) == EKeys::Gamepad_DPad_Left
+		&& FHWBindingTable::Scope(EHWBind::Map) == EHWBindScope::Explore);
+	FString Why;
+	TestTrue(TEXT("M is bindable while exploring"), FHWBindingTable::IsBindable(EKeys::M, EHWBindScope::Explore, Why));
+
+	// A save written before the map key existed: every action but Map.
+	auto OldSave = [](const FHWBindingTable& From)
+	{
+		TArray<FHWKeyBinding> A = From.ToArray();
+		A.RemoveAll([](const FHWKeyBinding& B) { return B.Action == EHWBind::Map; });
+		return A;
+	};
+	FHWBindingTable Loaded;
+	Loaded.FromArray(OldSave(Defaults));
+	TestTrue(TEXT("an old default save loads as today's defaults (Map on M)"), Loaded == Defaults);
+
+	// The player had put the notebook on M (free back then): the notebook keeps M, the map takes a free key.
+	FHWBindingTable Old;
+	FString Msg;
+	TestTrue(TEXT("light -> K"), Old.Rebind(EHWBind::Light, EKeys::K, Msg) == FHWBindingTable::EResult::Bound);
+	TArray<FHWKeyBinding> Saved = OldSave(Old);
+	for (FHWKeyBinding& B : Saved) { if (B.Action == EHWBind::Notebook) { B.Key = EKeys::M; } }
+	FHWBindingTable Migrated;
+	Migrated.FromArray(Saved);
+	TestTrue(TEXT("the saved keys win: the notebook stays on M, light stays on K"), Migrated.Get(EHWBind::Notebook) == EKeys::M && Migrated.Get(EHWBind::Light) == EKeys::K);
+	TestTrue(TEXT("the map moved to a free key"), Migrated.Get(EHWBind::Map).IsValid() && Migrated.Get(EHWBind::Map) != EKeys::M && Migrated.IsValid());
+	TestTrue(TEXT("nothing else changed"), Migrated.Get(EHWBind::Heavy) == Defaults.Get(EHWBind::Heavy) && Migrated.Get(EHWBind::Interact) == Defaults.Get(EHWBind::Interact)
+		&& Migrated.Get(EHWBind::Pause) == Defaults.Get(EHWBind::Pause));
+	FHWBindingTable Again;
+	Again.FromArray(Migrated.ToArray());
+	TestTrue(TEXT("the migrated table round-trips"), Again == Migrated);
 	return true;
 }
 

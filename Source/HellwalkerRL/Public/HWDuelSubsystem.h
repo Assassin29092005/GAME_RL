@@ -94,6 +94,13 @@ public:
 	/** Let a simulated player (the B0 instrument) drive the player character — demos and end-to-end checks. */
 	void SetAutoplay(bool bEnable, HW::EBotKind Kind = HW::EBotKind::Varied, float Skill = 0.7f);
 	bool IsAutoplay() const { return bAutoplay; }
+	/** -HWParity: the Unreal-vs-simulator harness is recording (its fights are never research data). */
+	bool IsParityRun() const { return !ParityPath.IsEmpty(); }
+	/** This fight was touched by a tool (hw.Kill, hw.InjectParry, hw.Hold, the autoplay bot): not research data. */
+	void MarkNotResearch(const TCHAR* Why);
+	bool IsNotResearch(FString* OutWhy = nullptr) const { if (OutWhy != nullptr) { *OutWhy = NotResearchWhy; } return bNotResearch; }
+	/** The difficulty this fight was started at (the settings may change mid-fight). */
+	const FString& GetFightDifficulty() const { return FightDifficulty; }
 	/** Walk intent in target space (x = right, y = forward), for the player controller when autoplay drives. */
 	FVector2D GetAutoplayWalk() const { return AutoplayWalk; }
 
@@ -161,6 +168,8 @@ private:
 	FVector StepWorldDirection(HW::ESide Side, HW::EDir Dir) const;
 	void AddFlash(const FVector& Where, const FLinearColor& Color, float Size, int32 Frames);
 	void Rumble(float Intensity, float Seconds) const;
+	/** The research record of the fight that just ended (after the frame's READ has been counted). */
+	void FlushFightRecord();
 	void RefreshKeeperIdentity();
 
 	void OpenTelemetry();
@@ -236,6 +245,15 @@ private:
 	float MoveAccelOverride = -1.f;
 	float MoveBrakingOverride = -1.f;
 	bool bNoHitstop = false;
+
+	// Research telemetry: whether this fight counts, and the end-of-fight record deferred to the end of HandleEvents.
+	bool bNotResearch = false;
+	FString NotResearchWhy;
+	FString FightDifficulty;
+	bool bInHandleEvents = false;
+	bool bRecordPending = false;
+	bool bPendingWon = false;
+	bool bPendingTimeout = false;
 	static constexpr int32 ParityMaxFrames = 180 * 60;
 
 	FString TelemetryPath;

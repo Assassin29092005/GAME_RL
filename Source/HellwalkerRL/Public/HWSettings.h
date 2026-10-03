@@ -29,7 +29,7 @@ enum class EHWDifficulty : uint8
 	Adaptive
 };
 
-/** The rebindable actions (keyboard / mouse). Movement (WASD) and Esc are fixed. */
+/** The rebindable actions (keyboard / mouse). Movement (WASD) and Esc are fixed. New actions go last: saves store the index. */
 UENUM(BlueprintType)
 enum class EHWBind : uint8
 {
@@ -46,6 +46,7 @@ enum class EHWBind : uint8
 	Pause,
 	Notebook,
 	Interact,
+	Map,
 	Count UMETA(Hidden)
 };
 
@@ -98,10 +99,17 @@ struct HELLWALKERRL_API FHWBindingTable
 	static bool IsBindable(const FKey& Key, EHWBindScope InScope, FString& OutWhyNot);
 
 	TArray<FHWKeyBinding> ToArray() const;
-	/** Unknown or invalid entries are ignored; a table that would clash falls back to the defaults. */
+	/**
+	 * Unknown or invalid entries are ignored; a table that would clash falls back to the defaults. An older save lacks the
+	 * actions added since (Map): each takes its default key, or — when the player has since put another action on that
+	 * key — the first free one from a fallback list (the saved keys win).
+	 */
 	void FromArray(const TArray<FHWKeyBinding>& In);
 
 private:
+	/** Key is bindable for Action and no other action sharing its scope holds it. */
+	bool Fits(EHWBind Action, const FKey& Key) const;
+
 	FKey Keys[Num];
 };
 

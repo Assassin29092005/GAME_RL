@@ -29,6 +29,8 @@ namespace HW
 		int32_t CountersLanded = 0;
 		int32_t Symbols = 0;             // classic brain only: symbols its observer emitted
 		int32_t PlayerGuardBreaks = 0;
+		int32_t PlayerParryPresses = 0;  // parry commits by the player (telemetry: parry success = BossOutcomes[Parried] / this)
+		int32_t PlayerSteps = 0;         // ghoststeps committed by the player
 		int32_t BossExposed = 0;
 		int32_t PlayerDeaths = 0;        // immortal mode counts would-be deaths
 		bool    bPlayerDied = false;

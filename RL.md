@@ -5,10 +5,10 @@ with a **reinforcement-learning (RL) policy trained from random initialisation**
 of the current build: the frame data, the moves, the duel rules, the fairness rules, the Read Meter and the Unreal
 presentation.
 
-> **Status (HellwalkerRL, 2026-10-03): built.** RL-0 to RL-5 are done; RL-6 is the human playtest. The shipped keeper
-> (1.17 × 10⁹ decisions, observation layout 3) is one network that plays all three keepers at every difficulty; it passes
+> **Status (HellwalkerRL, 2026-10-03): built.** RL-0 to RL-5 are done; RL-6 is the human playtest (the website collects it).
+> The shipped keeper (1.45 × 10⁹ decisions, observation layout 3, retrained after the combat changes from play) is one network that plays all three keepers at every difficulty; it passes
 > every B0 check for each keeper and the reading test, and the reading test is logged during training. RL-4's league ran
-> five rounds (ten exploiters in the population, plus learning players) but has not converged: a fresh exploiter still
+> seven rounds (fourteen exploiters in the population, plus learning players) but has not converged: a fresh exploiter still
 > finds a winning strategy, so "exploitability under the ceiling" is not met. The Unreal-vs-simulator gap is measured
 > (`Tools\Parity.bat`). The engineering contract is [RL/DESIGN.md](RL/DESIGN.md); results, status and the deviations the
 > work forced (C++ inference instead of NNE, the killer cooldown, the per-window aggression hinge, how reading is

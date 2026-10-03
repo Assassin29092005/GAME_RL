@@ -45,6 +45,7 @@ namespace HW
 		int32_t  ComboHitsTaken = 0;         // hits taken in the current combo (combo decay)
 		int32_t  FramesFree = 0;             // frames since this fighter was last stunned
 		int32_t  Weapon = 0;                 // player weapon index (C1)
+		int32_t  NoAttackUntil = -1;         // duel frame before which no attack may start (the keeper, after a parry)
 
 		// Blocking is a held state for the player (Enhanced Input), a stance move for the boss.
 		bool     bGuardHeld = false;

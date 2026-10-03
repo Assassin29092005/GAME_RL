@@ -27,6 +27,8 @@ masks, tokens, rewards, network format, trainer), `PLAN.md` (the combat spec; fr
 | `Tools\RLShip.bat <hwrl>` | put a trained policy where the game loads it: `Content\HellwalkerRL\RL\hellwalker_rl.hwrl` |
 | `Tools\Parity.bat` | the Unreal-vs-simulator gap (RL\parity.py): autoplay sessions in the arena (`-HWParity=<jsonl>`, one launch = one session, `-benchmark` fixed steps) vs `hwrl_eval_sessions` on the same bots/keeper → `RL
 eports\parity.md`. Close the editor; builds lock while it runs |
+| `web/` (website) | static site (Render, `render.yaml`) + Firebase rules; `web/dev/mock_firebase.py` (the Firebase REST API, local), `web/dev/e2e_test.py` (82 contract checks), `web/dev/serve.py`, `web/dev/export.py` (research CSV). Contract: `web/CONTRACT.md`; setup: `web/README.md` |
+| Game telemetry | `UHWTelemetrySubsystem` (Firebase REST, anonymous): off until `Config/DefaultGame.ini [HWTelemetry]` ApiKey/ProjectId. Tests: `-HWTelemetryEndpoint=http://127.0.0.1:8099 -HWTelemetryApiKey=x -HWTelemetryProjectId=y` (+ `-HWTelemetryAllowAutoplay` to upload bot fights to a mock only) |
 | `Tools\Play.bat` / `Tools\Arena.bat` | the open world / the duel alone (`-HWBoss=Sevarog\|Wukong\|Golem`, `-HWPolicy=<file.hwrl>`) |
 | `Tools\MakeMaps.bat` | regenerate `Content/HellwalkerRL/Maps/L_Hellwalker` + `L_Arena` via `-run=HWMakeMaps` |
 | `Tools\Package.bat` | the standalone game (.exe) into `Build\Packaged` |

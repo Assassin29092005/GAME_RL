@@ -3,7 +3,7 @@
 // lock-on runs in PlayerTick (PLAN A0).
 //
 // Three contexts. COMBAT (possessing Soul in a duel): the duel context. EXPLORE (the open world): a small
-// context — interact, title shortcuts, pause, help — on top of whatever the explorer pawn adds for itself (the Game
+// context — interact, the map, title shortcuts, pause, help — on top of whatever the explorer pawn adds for itself (the Game
 // Animation Sample's character adds its own mapping context when possessed). MENU (priority 100, only while a menu is
 // open): navigation, accept / back, tabs — it consumes its keys so nothing reaches the duel. Every possession clears
 // the mappings first, so the sets never fight over a key.
@@ -13,13 +13,15 @@
 //
 // Menus (the model: FHWMenu, HWMenu.h; the pages and their actions: HWPlayerControllerMenu.cpp; drawn by AHWHUD).
 // Esc / Start open and close the pause menu in both modes; pausing really pauses the world (the duel's frame cursor
-// stops and does not catch up). The open world's title is a menu too.
+// stops and does not catch up). The open world's title is a menu too, and so is the valley map (M / D-pad left while
+// exploring: a root page that pauses like the pause menu; its items are the keepers — accept tracks one).
 
 #pragma once
 
 #include "CoreMinimal.h"
 #include "GameFramework/PlayerController.h"
 #include "HWCore/HWTypes.h"
+#include "HWMap.h"
 #include "HWMenu.h"
 #include "HWPlayerController.generated.h"
 
@@ -90,6 +92,20 @@ public:
 	bool IsGamepadActive() const { return bGamepadLast; }
 	UHWSettingsSubsystem* GetSettings() const;
 
+	// ---- the valley map (open world, exploring) -----------------------------------------------------------
+	/** Pause and open the map, centred on the player, the tracked keeper selected. False when it cannot open now. */
+	bool OpenMap();
+	bool IsMapOpen() const { return Menu.GetPage() == EHWMenuPage::Map; }
+	/** hw.Map [open | close | track <0|1|2|auto> | zoom <x>]; no argument toggles. */
+	void MapConsole(const TArray<FString>& Args);
+	/** The map's view: zoom and pan (the controller's), placed where the HUD drew it last frame. */
+	HWMap::FView GetMapView() const;
+	/** The HUD, each frame the map is drawn: where its square is (drag-to-pan and zoom-at-the-cursor need it). */
+	void SetMapScreen(const FVector2D& Origin, double Side) { MapOrigin = Origin; MapSide = Side; }
+	/** The map page's item for a keeper ("Track_1"), and back (-1: not a map item). */
+	static FName TrackId(int32 Keeper);
+	static int32 ParseTrackId(FName Id);
+
 private:
 	/** The actions (once) and the contexts (again whenever the bindings change). */
 	void BuildInput();
@@ -118,6 +134,7 @@ private:
 	void OnHelpToggle();
 	void OnPause();
 	void OnNotebook();
+	void OnMap();
 	void OnInteract();
 	void OnChoice(int32 Choice);
 	/** COMBAT or EXPLORE mappings for the current pawn (+ MENU while a menu is open). */
@@ -145,6 +162,10 @@ private:
 	void SelectMenuItem(FName Id);
 	/** The arena's duel can be restarted (an encounter has begun). */
 	bool CanRestartDuel() const;
+	/** The map page, each frame: right stick / drag pan, triggers zoom; closes itself if exploring ends. */
+	void TickMap(float DeltaSeconds);
+	/** Zoom by Factor, keeping the map point under Anchor (screen pixels) where it is. */
+	void ZoomMap(double Factor, const FVector2D& Anchor);
 
 	FHWMenu Menu;
 	bool bPausedByMenu = false;
@@ -158,6 +179,13 @@ private:
 	/** The settings tab built last (-1: not on the settings page): entering Graphics re-reads the engine's settings. */
 	int32 LastBuiltTab = -1;
 	FDelegateHandle BindingsChangedHandle;
+	// The map's view (UV centre, zoom) and where the HUD put it on screen.
+	FVector2D MapCenter = FVector2D(0.5, 0.5);
+	double MapZoom = 1.0;
+	FVector2D MapOrigin = FVector2D::ZeroVector;
+	double MapSide = 0.0;
+	bool bMapDragging = false;
+	FVector2D MapDragLast = FVector2D::ZeroVector;
 
 	UPROPERTY() TObjectPtr<UInputMappingContext> Context;
 	UPROPERTY() TObjectPtr<UInputAction> IA_Move;
@@ -178,6 +206,7 @@ private:
 	UPROPERTY() TObjectPtr<UInputAction> IA_Notebook;
 	UPROPERTY() TObjectPtr<UInputMappingContext> ExploreContext;
 	UPROPERTY() TObjectPtr<UInputAction> IA_Interact;
+	UPROPERTY() TObjectPtr<UInputAction> IA_Map;
 	UPROPERTY() TObjectPtr<UInputAction> IA_Choice1;
 	UPROPERTY() TObjectPtr<UInputAction> IA_Choice2;
 	UPROPERTY() TObjectPtr<UInputAction> IA_Choice3;
@@ -193,6 +222,8 @@ private:
 	UPROPERTY() TObjectPtr<UInputAction> IA_MenuTabNext;
 	UPROPERTY() TObjectPtr<UInputAction> IA_MenuScroll;
 	UPROPERTY() TObjectPtr<UInputAction> IA_MenuPointer;
+	/** The map key (and D-pad left) while a menu is open: closes the map page; ignored on the others. */
+	UPROPERTY() TObjectPtr<UInputAction> IA_MenuMap;
 
 	FVector2D MoveInput = FVector2D::ZeroVector;
 	bool bLockedOn = true;

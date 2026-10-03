@@ -1,0 +1,5 @@
+# local mock database and research exports (web/dev/*.py)
+dev/mock_db.json
+dev/mock_db.json.tmp
+dev/export/
+__pycache__/

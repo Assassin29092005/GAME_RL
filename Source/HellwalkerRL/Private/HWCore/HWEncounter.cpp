@@ -131,6 +131,14 @@ namespace HW
 				{
 					++Stats.PlayerSwings;
 				}
+				else if (E.Move == EMoveId::PParry)
+				{
+					++Stats.PlayerParryPresses;
+				}
+				else if (E.Move != EMoveId::None && Move(E.Move).Kind == EMoveKind::Step)
+				{
+					++Stats.PlayerSteps;
+				}
 				break;
 			case EDuelEvent::Outcome:
 				Stats.DamageByMove[static_cast<int32_t>(E.Move)] += E.Damage;
