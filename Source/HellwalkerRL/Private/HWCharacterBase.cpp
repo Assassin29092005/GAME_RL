@@ -106,8 +106,11 @@ AHWCharacterBase::AHWCharacterBase()
 	}
 
 	UCharacterMovementComponent* CMC = GetCharacterMovement();
-	CMC->BrakingDecelerationWalking = 2400.f;
-	CMC->MaxAcceleration = 3000.f;
+	// The simulator the keeper was trained in walks at full speed at once and stops dead. With ordinary acceleration and
+	// braking (3000 / 2400 cm/s²: ~37 cm of slide per stop) the spacing went soft: the autoplay player spent 8x as many
+	// frames in reach and attacked ~50x as often as in the simulator, against the same keeper (RL\parity.py, Tools\Parity.bat).
+	CMC->BrakingDecelerationWalking = DuelMoveAccel;
+	CMC->MaxAcceleration = DuelMoveAccel;
 	CMC->GravityScale = 1.5f;
 
 	// C2: the character's own mesh component carries the cast. It must never collide: hit detection is

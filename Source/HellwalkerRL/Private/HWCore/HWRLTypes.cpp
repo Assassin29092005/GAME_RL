@@ -6,6 +6,48 @@ namespace HW
 {
 	namespace RL
 	{
+		FSkillParams SkillParams(float Skill)
+		{
+			const float S = Skill < 0.f ? 0.f : (Skill > 1.f ? 1.f : Skill);
+			const float Ease = 1.f - S;
+			auto Round = [](float V) { return static_cast<int32_t>(V + 0.5f); };
+			FSkillParams P;
+			P.Skill = S;
+			P.Perception = PerceptionFrames + Round(static_cast<float>(MaxPerceptionFrames - PerceptionFrames) * Ease);
+			P.DecisionGap = DecisionGapFrames + Round(6.f * Ease);
+			P.MaxString = S >= 0.6f ? MaxStringAttacks : (S >= 0.25f ? 2 : 1);
+			P.GrabCooldown = GrabCooldownFrames + Round(static_cast<float>(GrabCooldownFrames) * Ease);
+			P.KillerCooldown = KillerCooldownFrames + Round(static_cast<float>(KillerCooldownFrames) * Ease);
+			return P;
+		}
+
+		float TargetSwingsPerMin(float BaseTarget, float Skill)
+		{
+			const float S = Skill < 0.f ? 0.f : (Skill > 1.f ? 1.f : Skill);
+			return BaseTarget - 16.f * (1.f - S);
+		}
+
+		const char* KeeperName(int32_t Identity)
+		{
+			switch (Identity)
+			{
+			case 0:  return "Warden";
+			case 1:  return "Sage";
+			case 2:  return "Returned";
+			default: return "?";
+			}
+		}
+
+		float KeeperHealthScale(int32_t Identity)
+		{
+			switch (Identity)
+			{
+			case 1:  return 0.9f;
+			case 2:  return 1.25f;
+			default: return 1.f;
+			}
+		}
+
 		const char* ActionName(int32_t A)
 		{
 			if (A == ActionWait) { return "Wait"; }
@@ -51,6 +93,7 @@ namespace HW
 			if (I >= ObsPlayerPhase && I < ObsPlayerPhase + 4) { return Fmt("player.phase.", Phases[I - ObsPlayerPhase]); }
 			if (I >= ObsPlayerWeapon && I < ObsPlayerWeapon + 2) { return I == ObsPlayerWeapon ? "player.weapon.TwinBlades" : "player.weapon.Glaive"; }
 			if (I >= ObsPlayerLastOutcome && I < ObsPlayerLastOutcome + 5) { return Fmt("player.last_outcome.", Outcomes[I - ObsPlayerLastOutcome]); }
+			if (I >= ObsIdentity && I < ObsIdentity + NumKeepers) { return Fmt("keeper.identity.", KeeperName(I - ObsIdentity)); }
 			switch (I)
 			{
 			case ObsSelfHealth:            return "self.health";
@@ -87,6 +130,7 @@ namespace HW
 			case ObsFightIndex:            return "ctx.fight_index";
 			case ObsSwingDeficit:          return "ctx.swing_deficit";
 			case ObsSinceOwnSwing:         return "ctx.since_own_swing";
+			case ObsSkill:                 return "keeper.skill";
 			default:                       return "?";
 			}
 		}

@@ -5,6 +5,8 @@ rem here too, so the core cannot drift into code UE rejects.
 setlocal
 set VCVARS=C:\Program Files (x86)\Microsoft Visual Studio\18\BuildTools\VC\Auxiliary\Build\vcvars64.bat
 if not exist "%VCVARS%" set VCVARS=D:\prism\visual studio\VC\Auxiliary\Build\vcvars64.bat
+if not exist "%VCVARS%" for /f "usebackq delims=" %%I in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath`) do set "VCVARS=%%I\VC\Auxiliary\Build\vcvars64.bat"
+if not exist "%VCVARS%" (echo cannot find vcvars64.bat - install the Visual Studio C++ build tools & exit /b 1)
 call "%VCVARS%" >nul || exit /b 1
 set ROOT=%~dp0..
 if not exist "%~dp0out" mkdir "%~dp0out"

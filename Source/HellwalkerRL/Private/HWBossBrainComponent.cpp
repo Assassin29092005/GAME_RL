@@ -1,6 +1,7 @@
 #include "HWBossBrainComponent.h"
 
 #include "HWDuelSubsystem.h"
+#include "HWCore/HWSim.h"
 #include "HWTypesUE.h"
 #include "Engine/World.h"
 #include "GameFramework/Character.h"
@@ -61,7 +62,7 @@ void UHWBossBrainComponent::TickComponent(float DeltaTime, ELevelTick TickType, 
 		const float Seconds = static_cast<float>(FMath::Max(M.Active, 1)) / static_cast<float>(HW::FramesPerSecond);
 		Boss->GetCharacterMovement()->MaxWalkSpeed = M.Distance / Seconds;
 		const bool bForward = M.Dir == HW::EDir::Forward;
-		if (!bForward || Duel->FighterDistance() > 150.f)
+		if (!bForward || Duel->FighterDistance() > HW::FSimArena::ApproachStopDistance) // the simulator's rule
 		{
 			Boss->AddMovementInput(bForward ? ToPlayer : -ToPlayer, 1.f);
 		}

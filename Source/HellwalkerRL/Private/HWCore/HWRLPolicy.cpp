@@ -135,10 +135,24 @@ namespace HW
 			Parsed.clear();
 			return false;
 		}
-		if (NObs <= 0 || NAct <= 0 || NAct > FRLPolicyOutput::MaxActions || NAux <= 0 || NAux > FRLPolicyOutput::MaxAux
-			|| NEnc <= 0 || NEmbed <= 0 || NHidden <= 0 || NTok < 0 || NFields < 0 || NFields > 16)
+		if (NObs <= 0 || NObs > 4096 || NAct <= 0 || NAct > FRLPolicyOutput::MaxActions || NAux <= 0 || NAux > FRLPolicyOutput::MaxAux
+			|| NEnc <= 0 || NEmbed <= 0 || NHidden <= 0 || NTok < 0 || NTok > 256 || NFields < 0 || NFields > 16)
 		{
 			Error = "bad sizes in meta";
+			Parsed.clear();
+			return false;
+		}
+		if (PolicySide != 0 && PolicySide != 1)
+		{
+			Error = "meta.side must be 0 (a boss policy) or 1 (a player policy)";
+			Parsed.clear();
+			return false;
+		}
+		if (PolicySide == 0 && NHidden > RL::MaxHidden)
+		{
+			char Buf[128];
+			std::snprintf(Buf, sizeof(Buf), "a boss policy's hidden size %d exceeds the session memory (%d)", NHidden, RL::MaxHidden);
+			Error = Buf;
 			Parsed.clear();
 			return false;
 		}
@@ -208,12 +222,18 @@ namespace HW
 	void FRLPolicy::Forward(const float* Obs, const int8_t* Tokens, const uint8_t* Mask, const float* HiddenIn, float* HiddenOut,
 		FRLPolicyOutput& Out) const
 	{
+		Forward(Obs, Tokens, Mask, HiddenIn, HiddenOut, Out, Scratch.data());
+	}
+
+	void FRLPolicy::Forward(const float* Obs, const int8_t* Tokens, const uint8_t* Mask, const float* HiddenIn, float* HiddenOut,
+		FRLPolicyOutput& Out, float* ExternalScratch) const
+	{
 		Out = FRLPolicyOutput{};
 		Out.NumActions = NAct;
-		if (!bLoaded) { return; }
+		if (!bLoaded || ExternalScratch == nullptr) { return; }
 
 		const int32_t NZ = NEnc + NEmbed;
-		float* E1 = Scratch.data();
+		float* E1 = ExternalScratch;
 		float* E2 = E1 + NEnc;
 		float* Tok = E2 + NEnc;
 		float* Pool = Tok + NEmbed;

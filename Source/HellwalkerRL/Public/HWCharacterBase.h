@@ -50,6 +50,9 @@ class HELLWALKERRL_API AHWCharacterBase : public ACharacter
 public:
 	AHWCharacterBase();
 
+	/** Walking acceleration and braking of the duelists (cm/s²): effectively instant, as in the simulator (see the constructor). */
+	static constexpr float DuelMoveAccel = 60000.f;
+
 	virtual void BeginPlay() override;
 	virtual void Tick(float DeltaSeconds) override;
 

@@ -41,7 +41,8 @@ namespace HW
 	 * "classic": the reference project's tally brain (benchmark). "rl": the RL keeper with the weights in PolicyPath.
 	 * Returns nullptr (and prints why) if the arm cannot be built.
 	 */
-	std::unique_ptr<FSimArm> MakeAdaptiveArm(const char* Name, const char* PolicyPath, int32_t ScriptIndex, bool bDerivedPayoffs);
+	std::unique_ptr<FSimArm> MakeAdaptiveArm(const char* Name, const char* PolicyPath, int32_t ScriptIndex, bool bDerivedPayoffs,
+		float KeeperSkill = 1.f, int32_t KeeperIdentity = -1);
 
 	/** Tests beyond the game core and the classic brain (the RL keeper's), run by ThesisSim --tests. Returns the count. */
 	int32_t RunExtraTests(int32_t& InOutFailed);

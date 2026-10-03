@@ -10,6 +10,7 @@
 #include "CoreMinimal.h"
 #include "Subsystems/GameInstanceSubsystem.h"
 #include "HWTypesUE.h"
+#include "HWCore/HWRLBrain.h"
 #include "HWCore/HWRLObserver.h"
 #include "HWCore/HWRLPolicy.h"
 #include "HWSessionSubsystem.generated.h"
@@ -30,8 +31,29 @@ public:
 	/** What the keepers keep about you this session. */
 	HW::FRLSession& GetMemory() { return *Memory; }
 	const HW::FRLSession& GetMemory() const { return *Memory; }
-	/** Forget everything the keepers learned this session (hw.ResetModel, a new walk). */
+	/** Forget everything the keepers learned this session (hw.ResetModel, a new walk): memory, notebook, adaptive skill. */
 	void ResetMemory();
+	/** What the keepers wrote down about you this session (the notebook screen). Filled by the RL keeper; never an input. */
+	const HW::FRLNotebook& GetNotebook() const { return Notebook; }
+	HW::FRLNotebook& GetNotebookMutable() { return Notebook; }
+
+	// ---- difficulty (UHWSettingsSubsystem's choice, and the Adaptive controller's state for this session) ---------
+	/** The keeper's skill / sampling temperature / Easy breather (frames from one attack's commit to the next opener) for the next Hellwalker
+	 *  fight (Adaptive: this session's controller). */
+	void GetKeeperConfig(float& OutSkill, float& OutTemperature, bool& bOutAdaptive, int32& OutSwingGap) const;
+	/** Adaptive: after a Hellwalker fight, move the skill to keep fights close. Returns the change (0 when not Adaptive). */
+	float RecordFightForAdaptive(bool bPlayerWon, float PlayerHealthFrac, float BossHealthFrac);
+	float GetAdaptiveSkill() const { return AdaptiveSkill; }
+	float GetLastAdaptiveChange() const { return LastAdaptiveChange; }
+	/** The controller (pure, tested): keeper won with >= 40% of its health left -0.10, narrowly -0.03; the player won
+	 *  narrowly +0.04, with >= 40% left +0.10; clamped to [0, 1]. */
+	static float NextAdaptiveSkill(float Skill, bool bPlayerWon, float PlayerHealthFrac, float BossHealthFrac);
+	/** Adaptive play samples a little when it is easy (skill < 0.3). */
+	static float AdaptiveTemperature(float Skill) { return Skill < 0.3f ? 0.8f : 0.f; }
+	/** ... and below skill 0.15 it breathes between strings, up to Easy's breather at the floor (so a losing streak can
+	 *  bring it below the script, as Easy is). */
+	static int32 AdaptiveSwingGap(float Skill);
+	static constexpr float AdaptiveStart = 0.6f;
 	/** The read head, from the current memory: "if the keeper threw Move now, you would answer OutSym (OutP)". */
 	bool PredictAnswer(HW::EMoveId Move, HW::ESym& OutSym, float& OutP) const;
 
@@ -64,5 +86,8 @@ private:
 
 	HW::FRLPolicy Policy;
 	TUniquePtr<HW::FRLSession> Memory;
+	HW::FRLNotebook Notebook;
+	float AdaptiveSkill = AdaptiveStart;
+	float LastAdaptiveChange = 0.f;
 	FString PolicyStatus;
 };

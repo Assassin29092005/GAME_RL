@@ -1,0 +1,1352 @@
+[
+  {
+    "arm": "rl",
+    "bot": "rhythm",
+    "bot_skill": 0.7,
+    "identity": 0,
+    "skill": 1.0,
+    "temperature": 0.0,
+    "gap": 0,
+    "compare": {
+      "rows": [
+        {
+          "metric": "keeper_dmg_min",
+          "label": "keeper damage / min",
+          "ue": 951.316451450612,
+          "ue_lo": 853.7442085982113,
+          "ue_hi": 1057.4989875354363,
+          "sim": 1053.6906830039575,
+          "sim_lo": 1024.8038354757732,
+          "sim_hi": 1082.976472260592,
+          "rel_gap": -0.09715776480198882,
+          "tolerance": 0.15,
+          "intervals_overlap": true,
+          "consistent": true
+        },
+        {
+          "metric": "player_dmg_min",
+          "label": "player damage / min",
+          "ue": 1548.6248532617808,
+          "ue_lo": 1344.0214717065533,
+          "ue_hi": 1802.073306182895,
+          "sim": 626.6982383302706,
+          "sim_lo": 564.6879511775226,
+          "sim_hi": 690.4691904637825,
+          "rel_gap": 1.4710853781683269,
+          "tolerance": 0.2,
+          "intervals_overlap": false,
+          "consistent": false
+        },
+        {
+          "metric": "keeper_spm",
+          "label": "keeper swings / min",
+          "ue": 79.84236122757001,
+          "ue_lo": 77.65886287625418,
+          "ue_hi": 82.30104196685842,
+          "sim": 68.21373024549355,
+          "sim_lo": 67.27815869034107,
+          "sim_hi": 69.16514291418942,
+          "rel_gap": 0.17047346538924527,
+          "tolerance": 0.1,
+          "intervals_overlap": false,
+          "consistent": false
+        },
+        {
+          "metric": "player_spm",
+          "label": "player swings / min",
+          "ue": 58.56112694952205,
+          "ue_lo": 52.52365930599369,
+          "ue_hi": 66.79007774898186,
+          "sim": 24.330891271884408,
+          "sim_lo": 22.13951090210503,
+          "sim_hi": 26.54250477495964,
+          "rel_gap": 1.406863205097317,
+          "tolerance": 0.15,
+          "intervals_overlap": false,
+          "consistent": false
+        },
+        {
+          "metric": "hit_rate",
+          "label": "keeper hit rate",
+          "ue": 0.3629489603024575,
+          "ue_lo": 0.3383002236205731,
+          "ue_hi": 0.3903434174987293,
+          "sim": 0.4345982763413956,
+          "sim_lo": 0.42420410488389865,
+          "sim_hi": 0.4449684173405,
+          "rel_gap": -0.16486332307184412,
+          "tolerance": 0.1,
+          "intervals_overlap": false,
+          "consistent": false
+        },
+        {
+          "metric": "whiff_rate",
+          "label": "keeper whiff rate",
+          "ue": 0.07939508506616257,
+          "ue_lo": 0.06854700618647812,
+          "ue_hi": 0.09271606937449046,
+          "sim": 0.07763413956074507,
+          "sim_lo": 0.07328424562378438,
+          "sim_hi": 0.08183865125255395,
+          "rel_gap": 0.02268261766512711,
+          "tolerance": 0.25,
+          "intervals_overlap": true,
+          "consistent": true
+        },
+        {
+          "metric": "blocked_rate",
+          "label": "blocked rate",
+          "ue": 0.0,
+          "ue_lo": 0.0,
+          "ue_hi": 0.0,
+          "sim": 0.0,
+          "sim_lo": 0.0,
+          "sim_hi": 0.0,
+          "rel_gap": NaN,
+          "tolerance": 0.2,
+          "intervals_overlap": true,
+          "consistent": true
+        },
+        {
+          "metric": "parried_rate",
+          "label": "parried rate",
+          "ue": 0.2741020793950851,
+          "ue_lo": 0.25285171102661597,
+          "ue_hi": 0.29690877850671665,
+          "sim": 0.35258548790658883,
+          "sim_lo": 0.34376729197944483,
+          "sim_hi": 0.36117179771635816,
+          "rel_gap": -0.22259398416391013,
+          "tolerance": 0.2,
+          "intervals_overlap": false,
+          "consistent": false
+        },
+        {
+          "metric": "reads_min",
+          "label": "read counters / min",
+          "ue": 14.791212476941135,
+          "ue_lo": 11.725361018888384,
+          "ue_hi": 17.845030002608922,
+          "sim": 19.75581136592797,
+          "sim_lo": 19.15370316129371,
+          "sim_hi": 20.407260366343575,
+          "rel_gap": -0.25129815207433454,
+          "tolerance": 0.2,
+          "intervals_overlap": false,
+          "consistent": false
+        },
+        {
+          "metric": "fight_s",
+          "label": "fight length (s)",
+          "ue": 22.085185185185185,
+          "ue_lo": 20.297222222222224,
+          "ue_hi": 24.66530092592592,
+          "sim": 21.092527777353922,
+          "sim_lo": 20.527390995502472,
+          "sim_hi": 21.667277769883473,
+          "rel_gap": 0.04706204103697016,
+          "tolerance": 0.15,
+          "intervals_overlap": true,
+          "consistent": true
+        },
+        {
+          "metric": "player_death_rate",
+          "label": "player deaths / fight",
+          "ue": 0.8333333333333334,
+          "ue_lo": 0.7222222222222222,
+          "ue_hi": 0.9444444444444444,
+          "sim": 0.955,
+          "sim_lo": 0.9383333333333334,
+          "sim_hi": 0.97,
+          "rel_gap": -0.1273996509598603,
+          "tolerance": 0.1,
+          "intervals_overlap": true,
+          "consistent": true
+        },
+        {
+          "metric": "distance",
+          "label": "distance at keeper commits",
+          "ue": 187.36618122977347,
+          "ue_lo": 178.05365599024591,
+          "ue_hi": 196.81697688049294,
+          "sim": 201.2864498965083,
+          "sim_lo": 199.65148784541276,
+          "sim_hi": 202.98059349456327,
+          "rel_gap": -0.0691565113990134,
+          "tolerance": 0.1,
+          "intervals_overlap": false,
+          "consistent": true
+        }
+      ],
+      "move_mix": {
+        "js_bits": 0.015277161811488521,
+        "ue_top": [
+          [
+            "FastSlash",
+            0.3802588996763754
+          ],
+          [
+            "DelayedHeavy",
+            0.37540453074433655
+          ],
+          [
+            "Grab",
+            0.06796116504854369
+          ],
+          [
+            "DashIn",
+            0.06310679611650485
+          ]
+        ],
+        "sim_top": [
+          [
+            "DelayedHeavy",
+            0.45680345572354214
+          ],
+          [
+            "FastSlash",
+            0.30771538276937843
+          ],
+          [
+            "Grab",
+            0.056515478761699066
+          ],
+          [
+            "DashIn",
+            0.051235901127909766
+          ]
+        ]
+      },
+      "ue_sessions": 6,
+      "sim_sessions": 200,
+      "ue_fights": 18,
+      "sim_fights": 600
+    },
+    "ue_real_seconds": 143.42000000000002
+  },
+  {
+    "arm": "script",
+    "bot": "rhythm",
+    "bot_skill": 0.7,
+    "identity": 0,
+    "skill": 1.0,
+    "temperature": 0.0,
+    "gap": 0,
+    "compare": {
+      "rows": [
+        {
+          "metric": "keeper_dmg_min",
+          "label": "keeper damage / min",
+          "ue": 498.8054607508533,
+          "ue_lo": 398.0537050089812,
+          "ue_hi": 590.5681762184004,
+          "sim": 466.5226931687048,
+          "sim_lo": 455.99891927689663,
+          "sim_hi": 477.87878932301436,
+          "rel_gap": 0.06919870791896149,
+          "tolerance": 0.15,
+          "intervals_overlap": true,
+          "consistent": true
+        },
+        {
+          "metric": "player_dmg_min",
+          "label": "player damage / min",
+          "ue": 1440.61433447099,
+          "ue_lo": 1314.0550253191143,
+          "ue_hi": 1584.2347446065623,
+          "sim": 379.5706341407986,
+          "sim_lo": 353.5447028713509,
+          "sim_hi": 406.08824946739674,
+          "rel_gap": 2.79537879091196,
+          "tolerance": 0.2,
+          "intervals_overlap": false,
+          "consistent": false
+        },
+        {
+          "metric": "keeper_spm",
+          "label": "keeper swings / min",
+          "ue": 64.07849829351537,
+          "ue_lo": 61.59041926811385,
+          "ue_hi": 66.50015812344466,
+          "sim": 51.81096263366877,
+          "sim_lo": 51.38636502313393,
+          "sim_hi": 52.26798765511001,
+          "rel_gap": 0.23677490315292218,
+          "tolerance": 0.1,
+          "intervals_overlap": false,
+          "consistent": false
+        },
+        {
+          "metric": "player_spm",
+          "label": "player swings / min",
+          "ue": 61.86006825938567,
+          "ue_lo": 57.40017460828011,
+          "ue_hi": 66.29252893721501,
+          "sim": 12.27805932772893,
+          "sim_lo": 11.491357617624617,
+          "sim_hi": 13.034022924118094,
+          "rel_gap": 4.038261064570692,
+          "tolerance": 0.15,
+          "intervals_overlap": false,
+          "consistent": false
+        },
+        {
+          "metric": "hit_rate",
+          "label": "keeper hit rate",
+          "ue": 0.3062583222370173,
+          "ue_lo": 0.2565789473684211,
+          "ue_hi": 0.34854771784232363,
+          "sim": 0.32750130119710136,
+          "sim_lo": 0.3222191250829703,
+          "sim_hi": 0.33289888792834743,
+          "rel_gap": -0.0648638001816649,
+          "tolerance": 0.1,
+          "intervals_overlap": true,
+          "consistent": true
+        },
+        {
+          "metric": "whiff_rate",
+          "label": "keeper whiff rate",
+          "ue": 0.10386151797603196,
+          "ue_lo": 0.09530386740331492,
+          "ue_hi": 0.11458436264822133,
+          "sim": 0.09849061136245346,
+          "sim_lo": 0.0962880454685128,
+          "sim_hi": 0.1004777216757755,
+          "rel_gap": 0.05453216849079278,
+          "tolerance": 0.25,
+          "intervals_overlap": true,
+          "consistent": true
+        },
+        {
+          "metric": "blocked_rate",
+          "label": "blocked rate",
+          "ue": 0.0,
+          "ue_lo": 0.0,
+          "ue_hi": 0.0,
+          "sim": 0.0,
+          "sim_lo": 0.0,
+          "sim_hi": 0.0,
+          "rel_gap": NaN,
+          "tolerance": 0.2,
+          "intervals_overlap": true,
+          "consistent": true
+        },
+        {
+          "metric": "parried_rate",
+          "label": "parried rate",
+          "ue": 0.3182423435419441,
+          "ue_lo": 0.2921646746347942,
+          "ue_hi": 0.3468586387434555,
+          "sim": 0.48612723705809346,
+          "sim_lo": 0.48043032459250423,
+          "sim_hi": 0.491479518570133,
+          "rel_gap": -0.3453517530351559,
+          "tolerance": 0.2,
+          "intervals_overlap": false,
+          "consistent": false
+        },
+        {
+          "metric": "reads_min",
+          "label": "read counters / min",
+          "ue": 0.0,
+          "ue_lo": 0.0,
+          "ue_hi": 0.0,
+          "sim": 0.0,
+          "sim_lo": 0.0,
+          "sim_hi": 0.0,
+          "rel_gap": NaN,
+          "tolerance": 0.2,
+          "intervals_overlap": true,
+          "consistent": true
+        },
+        {
+          "metric": "fight_s",
+          "label": "fight length (s)",
+          "ue": 39.06666666666666,
+          "ue_lo": 36.124583333333334,
+          "ue_hi": 41.958333333333336,
+          "sim": 48.207944285074866,
+          "sim_lo": 47.05530484167735,
+          "sim_hi": 49.336035349845886,
+          "rel_gap": -0.18962180930910041,
+          "tolerance": 0.15,
+          "intervals_overlap": false,
+          "consistent": false
+        },
+        {
+          "metric": "player_death_rate",
+          "label": "player deaths / fight",
+          "ue": 0.6111111111111112,
+          "ue_lo": 0.3333333333333333,
+          "ue_hi": 0.8888888888888888,
+          "sim": 0.9816666666666667,
+          "sim_lo": 0.9683333333333334,
+          "sim_hi": 0.9916666666666667,
+          "rel_gap": -0.37747594793435196,
+          "tolerance": 0.1,
+          "intervals_overlap": false,
+          "consistent": false
+        },
+        {
+          "metric": "distance",
+          "label": "distance at keeper commits",
+          "ue": 206.53130148270182,
+          "ue_lo": 203.866218487395,
+          "ue_hi": 209.7464166666667,
+          "sim": 211.05417319545074,
+          "sim_lo": 210.6301985004784,
+          "sim_hi": 211.47923769187514,
+          "rel_gap": -0.02142990893887908,
+          "tolerance": 0.1,
+          "intervals_overlap": false,
+          "consistent": true
+        }
+      ],
+      "move_mix": {
+        "js_bits": 0.0010554167194963666,
+        "ue_top": [
+          [
+            "FastSlash",
+            0.24052718286655683
+          ],
+          [
+            "Approach",
+            0.1985172981878089
+          ],
+          [
+            "HeavyCleave",
+            0.09472817133443164
+          ],
+          [
+            "SweepLeft",
+            0.051070840197693576
+          ]
+        ],
+        "sim_top": [
+          [
+            "FastSlash",
+            0.24726853039240831
+          ],
+          [
+            "Approach",
+            0.16935111567068478
+          ],
+          [
+            "HeavyCleave",
+            0.09607591690176968
+          ],
+          [
+            "Guard",
+            0.05383431649140805
+          ]
+        ]
+      },
+      "ue_sessions": 6,
+      "sim_sessions": 200,
+      "ue_fights": 18,
+      "sim_fights": 600
+    },
+    "ue_real_seconds": 266.28
+  },
+  {
+    "arm": "rl",
+    "bot": "habitual",
+    "bot_skill": 0.7,
+    "identity": 0,
+    "skill": 1.0,
+    "temperature": 0.0,
+    "gap": 0,
+    "compare": {
+      "rows": [
+        {
+          "metric": "keeper_dmg_min",
+          "label": "keeper damage / min",
+          "ue": 819.9080073862682,
+          "ue_lo": 776.2171571122473,
+          "ue_hi": 862.6802960874163,
+          "sim": 965.5421911058191,
+          "sim_lo": 955.3820505191483,
+          "sim_hi": 975.6244924080329,
+          "rel_gap": -0.15083150696165704,
+          "tolerance": 0.15,
+          "intervals_overlap": false,
+          "consistent": false
+        },
+        {
+          "metric": "player_dmg_min",
+          "label": "player damage / min",
+          "ue": 346.7651502434111,
+          "ue_lo": 274.37800729999384,
+          "ue_hi": 420.6006322444679,
+          "sim": 7.4278292557909715,
+          "sim_lo": 4.040295588522919,
+          "sim_hi": 11.124474322687254,
+          "rel_gap": 45.68458822920061,
+          "tolerance": 0.2,
+          "intervals_overlap": false,
+          "consistent": false
+        },
+        {
+          "metric": "keeper_spm",
+          "label": "keeper swings / min",
+          "ue": 72.398858485815,
+          "ue_lo": 71.34029405497549,
+          "ue_hi": 73.37131694611753,
+          "sim": 72.6389889028295,
+          "sim_lo": 72.46012821548534,
+          "sim_hi": 72.82562483214492,
+          "rel_gap": -0.003305806160596826,
+          "tolerance": 0.1,
+          "intervals_overlap": true,
+          "consistent": true
+        },
+        {
+          "metric": "player_spm",
+          "label": "player swings / min",
+          "ue": 16.075205640423032,
+          "ue_lo": 13.040267276244064,
+          "ue_hi": 19.34790397706915,
+          "sim": 0.34399895352719767,
+          "sim_lo": 0.1953994077080606,
+          "sim_hi": 0.49826974140662206,
+          "rel_gap": 45.73039111193713,
+          "tolerance": 0.15,
+          "intervals_overlap": false,
+          "consistent": false
+        },
+        {
+          "metric": "hit_rate",
+          "label": "keeper hit rate",
+          "ue": 0.2704507512520868,
+          "ue_lo": 0.2507987220447284,
+          "ue_hi": 0.291958041958042,
+          "sim": 0.31109681945743684,
+          "sim_lo": 0.3072706010039819,
+          "sim_hi": 0.3151680558635276,
+          "rel_gap": -0.13065407829060463,
+          "tolerance": 0.1,
+          "intervals_overlap": false,
+          "consistent": false
+        },
+        {
+          "metric": "whiff_rate",
+          "label": "keeper whiff rate",
+          "ue": 0.4006677796327212,
+          "ue_lo": 0.3645413118183176,
+          "ue_hi": 0.43487407881021056,
+          "sim": 0.4200187090739008,
+          "sim_lo": 0.4146553133840458,
+          "sim_hi": 0.4255125774830913,
+          "rel_gap": -0.04607158924859912,
+          "tolerance": 0.25,
+          "intervals_overlap": true,
+          "consistent": true
+        },
+        {
+          "metric": "blocked_rate",
+          "label": "blocked rate",
+          "ue": 0.17362270450751252,
+          "ue_lo": 0.14192368214004722,
+          "ue_hi": 0.20677966101694914,
+          "sim": 0.19767305893358278,
+          "sim_lo": 0.1935614627497602,
+          "sim_hi": 0.2018203879274777,
+          "rel_gap": -0.12166733573011113,
+          "tolerance": 0.2,
+          "intervals_overlap": true,
+          "consistent": true
+        },
+        {
+          "metric": "parried_rate",
+          "label": "parried rate",
+          "ue": 0.07178631051752922,
+          "ue_lo": 0.05400696864111498,
+          "ue_hi": 0.090311986863711,
+          "sim": 0.06939897100093545,
+          "sim_lo": 0.06534245901848877,
+          "sim_hi": 0.07394826405886837,
+          "rel_gap": 0.03440021490465025,
+          "tolerance": 0.2,
+          "intervals_overlap": true,
+          "consistent": true
+        },
+        {
+          "metric": "reads_min",
+          "label": "read counters / min",
+          "ue": 12.811818029209332,
+          "ue_lo": 11.441647597254006,
+          "ue_hi": 14.071333845187409,
+          "sim": 15.82819876291192,
+          "sim_lo": 15.547749488658532,
+          "sim_hi": 16.099772419323617,
+          "rel_gap": -0.19057005657336484,
+          "tolerance": 0.2,
+          "intervals_overlap": false,
+          "consistent": true
+        },
+        {
+          "metric": "fight_s",
+          "label": "fight length (s)",
+          "ue": 27.578703703703706,
+          "ue_lo": 26.177777777777777,
+          "ue_hi": 29.228055555555553,
+          "sim": 23.546583258310953,
+          "sim_lo": 23.30322076845169,
+          "sim_hi": 23.79992636855443,
+          "rel_gap": 0.17124014984083025,
+          "tolerance": 0.15,
+          "intervals_overlap": false,
+          "consistent": false
+        },
+        {
+          "metric": "player_death_rate",
+          "label": "player deaths / fight",
+          "ue": 1.0,
+          "ue_lo": 1.0,
+          "ue_hi": 1.0,
+          "sim": 1.0,
+          "sim_lo": 1.0,
+          "sim_hi": 1.0,
+          "rel_gap": 0.0,
+          "tolerance": 0.1,
+          "intervals_overlap": true,
+          "consistent": true
+        },
+        {
+          "metric": "distance",
+          "label": "distance at keeper commits",
+          "ue": 260.19732824427484,
+          "ue_lo": 253.0389961389961,
+          "ue_hi": 266.6606484535768,
+          "sim": 263.00722520957964,
+          "sim_lo": 262.146568005974,
+          "sim_hi": 263.8498246498272,
+          "rel_gap": -0.010683725373193493,
+          "tolerance": 0.1,
+          "intervals_overlap": true,
+          "consistent": true
+        }
+      ],
+      "move_mix": {
+        "js_bits": 0.029846026894503153,
+        "ue_top": [
+          [
+            "DelayedHeavy",
+            0.3473282442748092
+          ],
+          [
+            "Approach",
+            0.14376590330788805
+          ],
+          [
+            "HeavyCleave",
+            0.1361323155216285
+          ],
+          [
+            "FastSlash",
+            0.12213740458015267
+          ]
+        ],
+        "sim_top": [
+          [
+            "DelayedHeavy",
+            0.24406261245052177
+          ],
+          [
+            "HeavySweepLeft",
+            0.17429830874415259
+          ],
+          [
+            "HeavyCleave",
+            0.16669665347247212
+          ],
+          [
+            "Approach",
+            0.14771500539762505
+          ]
+        ]
+      },
+      "ue_sessions": 6,
+      "sim_sessions": 200,
+      "ue_fights": 18,
+      "sim_fights": 600
+    },
+    "ue_real_seconds": 144.29000000000002
+  },
+  {
+    "arm": "script",
+    "bot": "habitual",
+    "bot_skill": 0.7,
+    "identity": 0,
+    "skill": 1.0,
+    "temperature": 0.0,
+    "gap": 0,
+    "compare": {
+      "rows": [
+        {
+          "metric": "keeper_dmg_min",
+          "label": "keeper damage / min",
+          "ue": 460.6150197628458,
+          "ue_lo": 421.9364709310797,
+          "ue_hi": 509.7204132617193,
+          "sim": 440.84713751243845,
+          "sim_lo": 433.05600074589046,
+          "sim_hi": 448.37017664956886,
+          "rel_gap": 0.04484067280543384,
+          "tolerance": 0.15,
+          "intervals_overlap": true,
+          "consistent": true
+        },
+        {
+          "metric": "player_dmg_min",
+          "label": "player damage / min",
+          "ue": 1027.0743083003954,
+          "ue_lo": 908.2976560308923,
+          "ue_hi": 1184.7085440511048,
+          "sim": 220.90165145504312,
+          "sim_lo": 208.99123105963437,
+          "sim_hi": 232.12162890910903,
+          "rel_gap": 3.6494641463077557,
+          "tolerance": 0.2,
+          "intervals_overlap": false,
+          "consistent": false
+        },
+        {
+          "metric": "keeper_spm",
+          "label": "keeper swings / min",
+          "ue": 66.87747035573123,
+          "ue_lo": 65.26811636234316,
+          "ue_hi": 68.5948531086313,
+          "sim": 63.7858775086181,
+          "sim_lo": 63.59959758588586,
+          "sim_hi": 63.96716704447226,
+          "rel_gap": 0.04846829686862,
+          "tolerance": 0.1,
+          "intervals_overlap": false,
+          "consistent": true
+        },
+        {
+          "metric": "player_spm",
+          "label": "player swings / min",
+          "ue": 47.45454545454546,
+          "ue_lo": 42.02308960967565,
+          "ue_hi": 54.90437729703559,
+          "sim": 9.154673063290018,
+          "sim_lo": 8.649230415634772,
+          "sim_hi": 9.638004714158797,
+          "rel_gap": 4.183641745201896,
+          "tolerance": 0.15,
+          "intervals_overlap": false,
+          "consistent": false
+        },
+        {
+          "metric": "hit_rate",
+          "label": "keeper hit rate",
+          "ue": 0.26276595744680853,
+          "ue_lo": 0.23975322483844977,
+          "ue_hi": 0.29205607476635514,
+          "sim": 0.2749321992110454,
+          "sim_lo": 0.27069612365143914,
+          "sim_hi": 0.2791652869551677,
+          "rel_gap": -0.044251789347153646,
+          "tolerance": 0.1,
+          "intervals_overlap": true,
+          "consistent": true
+        },
+        {
+          "metric": "whiff_rate",
+          "label": "keeper whiff rate",
+          "ue": 0.2872340425531915,
+          "ue_lo": 0.25931011333361526,
+          "ue_hi": 0.310838445807771,
+          "sim": 0.33398052268244577,
+          "sim_lo": 0.3300450523456455,
+          "sim_hi": 0.3381785220135325,
+          "rel_gap": -0.1399676836056143,
+          "tolerance": 0.25,
+          "intervals_overlap": false,
+          "consistent": true
+        },
+        {
+          "metric": "blocked_rate",
+          "label": "blocked rate",
+          "ue": 0.026595744680851064,
+          "ue_lo": 0.018531664940201524,
+          "ue_hi": 0.03322259136212625,
+          "sim": 0.03997164694280079,
+          "sim_lo": 0.03793199107722493,
+          "sim_hi": 0.0421474799159995,
+          "rel_gap": -0.3346347545071277,
+          "tolerance": 0.2,
+          "intervals_overlap": false,
+          "consistent": false
+        },
+        {
+          "metric": "parried_rate",
+          "label": "parried rate",
+          "ue": 0.1851063829787234,
+          "ue_lo": 0.16740633380058506,
+          "ue_hi": 0.20758844629581413,
+          "sim": 0.2741000986193294,
+          "sim_lo": 0.27015447098820755,
+          "sim_hi": 0.27797728610055017,
+          "rel_gap": -0.32467597089120565,
+          "tolerance": 0.2,
+          "intervals_overlap": false,
+          "consistent": false
+        },
+        {
+          "metric": "reads_min",
+          "label": "read counters / min",
+          "ue": 0.0,
+          "ue_lo": 0.0,
+          "ue_hi": 0.0,
+          "sim": 0.0,
+          "sim_lo": 0.0,
+          "sim_hi": 0.0,
+          "rel_gap": NaN,
+          "tolerance": 0.2,
+          "intervals_overlap": true,
+          "consistent": true
+        },
+        {
+          "metric": "fight_s",
+          "label": "fight length (s)",
+          "ue": 46.85185185185185,
+          "ue_lo": 42.61018518518519,
+          "ue_hi": 51.43518518518518,
+          "sim": 50.870194574991864,
+          "sim_lo": 50.0296319843928,
+          "sim_hi": 51.79100154972077,
+          "rel_gap": -0.07899208478977317,
+          "tolerance": 0.15,
+          "intervals_overlap": true,
+          "consistent": true
+        },
+        {
+          "metric": "player_death_rate",
+          "label": "player deaths / fight",
+          "ue": 0.7777777777777778,
+          "ue_lo": 0.6666666666666666,
+          "ue_hi": 0.8888888888888888,
+          "sim": 1.0,
+          "sim_lo": 1.0,
+          "sim_hi": 1.0,
+          "rel_gap": -0.2222222222222222,
+          "tolerance": 0.1,
+          "intervals_overlap": false,
+          "consistent": false
+        },
+        {
+          "metric": "distance",
+          "label": "distance at keeper commits",
+          "ue": 215.49808959156783,
+          "ue_lo": 210.93743939748995,
+          "ue_hi": 219.49737448508787,
+          "sim": 219.5740369942502,
+          "sim_lo": 219.06940522415306,
+          "sim_hi": 220.0622660263332,
+          "rel_gap": -0.018562975197241136,
+          "tolerance": 0.1,
+          "intervals_overlap": true,
+          "consistent": true
+        }
+      ],
+      "move_mix": {
+        "js_bits": 0.0007293778301363629,
+        "ue_top": [
+          [
+            "FastSlash",
+            0.23978919631093545
+          ],
+          [
+            "Approach",
+            0.19367588932806323
+          ],
+          [
+            "HeavyCleave",
+            0.09288537549407115
+          ],
+          [
+            "SweepLeft",
+            0.050724637681159424
+          ]
+        ],
+        "sim_top": [
+          [
+            "FastSlash",
+            0.24746202880302196
+          ],
+          [
+            "Approach",
+            0.169473518533092
+          ],
+          [
+            "HeavyCleave",
+            0.09707247973557881
+          ],
+          [
+            "SweepLeft",
+            0.052589124104824116
+          ]
+        ]
+      },
+      "ue_sessions": 6,
+      "sim_sessions": 200,
+      "ue_fights": 18,
+      "sim_fights": 600
+    },
+    "ue_real_seconds": 248.54
+  },
+  {
+    "arm": "rl",
+    "bot": "varied",
+    "bot_skill": 0.5,
+    "identity": 0,
+    "skill": 1.0,
+    "temperature": 0.0,
+    "gap": 0,
+    "compare": {
+      "rows": [
+        {
+          "metric": "keeper_dmg_min",
+          "label": "keeper damage / min",
+          "ue": 1131.3385826771653,
+          "ue_lo": 1071.9076357911313,
+          "ue_hi": 1202.8712197227733,
+          "sim": 1190.283345500126,
+          "sim_lo": 1177.180912795308,
+          "sim_hi": 1203.1561181450552,
+          "rel_gap": -0.04952162276805917,
+          "tolerance": 0.15,
+          "intervals_overlap": true,
+          "consistent": true
+        },
+        {
+          "metric": "player_dmg_min",
+          "label": "player damage / min",
+          "ue": 200.08288437629508,
+          "ue_lo": 172.11349743822439,
+          "ue_hi": 230.41814826484222,
+          "sim": 12.609668865825839,
+          "sim_lo": 7.842832125490915,
+          "sim_hi": 17.511258894458383,
+          "rel_gap": 14.867417812893626,
+          "tolerance": 0.2,
+          "intervals_overlap": false,
+          "consistent": false
+        },
+        {
+          "metric": "keeper_spm",
+          "label": "keeper swings / min",
+          "ue": 75.42478242851223,
+          "ue_lo": 73.31153666510977,
+          "ue_hi": 77.9865641125499,
+          "sim": 79.600177283896,
+          "sim_lo": 79.17171215118653,
+          "sim_hi": 80.02954199244492,
+          "rel_gap": -0.05245459241242796,
+          "tolerance": 0.1,
+          "intervals_overlap": false,
+          "consistent": true
+        },
+        {
+          "metric": "player_spm",
+          "label": "player swings / min",
+          "ue": 10.443431413178617,
+          "ue_lo": 8.076540171169164,
+          "ue_hi": 13.013209568011426,
+          "sim": 0.6833084420831009,
+          "sim_lo": 0.45478387701320544,
+          "sim_hi": 0.9213315595316496,
+          "rel_gap": 14.283627085509552,
+          "tolerance": 0.15,
+          "intervals_overlap": false,
+          "consistent": false
+        },
+        {
+          "metric": "hit_rate",
+          "label": "keeper hit rate",
+          "ue": 0.512087912087912,
+          "ue_lo": 0.4529459864102269,
+          "ue_hi": 0.5787037037037037,
+          "sim": 0.5501848917062864,
+          "sim_lo": 0.5415988882347129,
+          "sim_hi": 0.5587457527217252,
+          "rel_gap": -0.06924395815418397,
+          "tolerance": 0.1,
+          "intervals_overlap": true,
+          "consistent": true
+        },
+        {
+          "metric": "whiff_rate",
+          "label": "keeper whiff rate",
+          "ue": 0.2549450549450549,
+          "ue_lo": 0.23589679112899267,
+          "ue_hi": 0.2727272727272727,
+          "sim": 0.24749075541468568,
+          "sim_lo": 0.2413816094338097,
+          "sim_hi": 0.2535169626773446,
+          "rel_gap": 0.03011950696048876,
+          "tolerance": 0.25,
+          "intervals_overlap": true,
+          "consistent": true
+        },
+        {
+          "metric": "blocked_rate",
+          "label": "blocked rate",
+          "ue": 0.1054945054945055,
+          "ue_lo": 0.07126948775055679,
+          "ue_hi": 0.14255630978093178,
+          "sim": 0.1045298468040148,
+          "sim_lo": 0.09939774515747336,
+          "sim_hi": 0.10958257860856717,
+          "rel_gap": 0.009228547826147286,
+          "tolerance": 0.2,
+          "intervals_overlap": true,
+          "consistent": true
+        },
+        {
+          "metric": "parried_rate",
+          "label": "parried rate",
+          "ue": 0.0967032967032967,
+          "ue_lo": 0.08520179372197309,
+          "ue_hi": 0.10920770877944326,
+          "sim": 0.0958135235076598,
+          "sim_lo": 0.0916166095596093,
+          "sim_hi": 0.10017276020287742,
+          "rel_gap": 0.009286509493263475,
+          "tolerance": 0.2,
+          "intervals_overlap": true,
+          "consistent": true
+        },
+        {
+          "metric": "reads_min",
+          "label": "read counters / min",
+          "ue": 17.90302527973477,
+          "ue_lo": 11.006735200283588,
+          "ue_hi": 25.31874574899136,
+          "sim": 18.09190505884641,
+          "sim_lo": 16.8506303770207,
+          "sim_hi": 19.368536705088324,
+          "rel_gap": -0.010440016045700192,
+          "tolerance": 0.2,
+          "intervals_overlap": true,
+          "consistent": true
+        },
+        {
+          "metric": "fight_s",
+          "label": "fight length (s)",
+          "ue": 20.108333333333334,
+          "ue_lo": 18.920370370370375,
+          "ue_hi": 21.133333333333333,
+          "sim": 19.02508325576782,
+          "sim_lo": 18.825657577673596,
+          "sim_hi": 19.239968686421715,
+          "rel_gap": 0.05693799406828375,
+          "tolerance": 0.15,
+          "intervals_overlap": true,
+          "consistent": true
+        },
+        {
+          "metric": "player_death_rate",
+          "label": "player deaths / fight",
+          "ue": 1.0,
+          "ue_lo": 1.0,
+          "ue_hi": 1.0,
+          "sim": 1.0,
+          "sim_lo": 1.0,
+          "sim_hi": 1.0,
+          "rel_gap": 0.0,
+          "tolerance": 0.1,
+          "intervals_overlap": true,
+          "consistent": true
+        },
+        {
+          "metric": "distance",
+          "label": "distance at keeper commits",
+          "ue": 246.49548494983276,
+          "ue_lo": 243.3531516183986,
+          "ue_hi": 249.93177419354836,
+          "sim": 244.1299050716116,
+          "sim_lo": 243.12371225995167,
+          "sim_hi": 245.11893293598507,
+          "rel_gap": 0.009689840650727529,
+          "tolerance": 0.1,
+          "intervals_overlap": true,
+          "consistent": true
+        }
+      ],
+      "move_mix": {
+        "js_bits": 0.02679186796982217,
+        "ue_top": [
+          [
+            "FastSlash",
+            0.3093645484949833
+          ],
+          [
+            "DelayedHeavy",
+            0.3076923076923077
+          ],
+          [
+            "HeavyCleave",
+            0.08862876254180602
+          ],
+          [
+            "Approach",
+            0.07357859531772576
+          ]
+        ],
+        "sim_top": [
+          [
+            "FastSlash",
+            0.36831370149405945
+          ],
+          [
+            "DelayedHeavy",
+            0.26796185814083934
+          ],
+          [
+            "HeavyCleave",
+            0.08138289735352608
+          ],
+          [
+            "Approach",
+            0.0672071796440773
+          ]
+        ]
+      },
+      "ue_sessions": 6,
+      "sim_sessions": 200,
+      "ue_fights": 18,
+      "sim_fights": 600
+    },
+    "ue_real_seconds": 106.67
+  },
+  {
+    "arm": "script",
+    "bot": "varied",
+    "bot_skill": 0.5,
+    "identity": 0,
+    "skill": 1.0,
+    "temperature": 0.0,
+    "gap": 0,
+    "compare": {
+      "rows": [
+        {
+          "metric": "keeper_dmg_min",
+          "label": "keeper damage / min",
+          "ue": 685.6129783788391,
+          "ue_lo": 643.7433552174786,
+          "ue_hi": 748.3485978661128,
+          "sim": 729.0069454204265,
+          "sim_lo": 717.9056475343898,
+          "sim_hi": 740.50980218022,
+          "rel_gap": -0.059524764906816664,
+          "tolerance": 0.15,
+          "intervals_overlap": true,
+          "consistent": true
+        },
+        {
+          "metric": "player_dmg_min",
+          "label": "player damage / min",
+          "ue": 584.3338920930761,
+          "ue_lo": 536.3485059377499,
+          "ue_hi": 627.208988764045,
+          "sim": 170.00783208815562,
+          "sim_lo": 158.13167337454666,
+          "sim_hi": 182.19747404094682,
+          "rel_gap": 2.437099837789099,
+          "tolerance": 0.2,
+          "intervals_overlap": false,
+          "consistent": false
+        },
+        {
+          "metric": "keeper_spm",
+          "label": "keeper swings / min",
+          "ue": 63.72133988692218,
+          "ue_lo": 62.29027889106941,
+          "ue_hi": 64.9646746677402,
+          "sim": 65.42281574501934,
+          "sim_lo": 65.27378027238977,
+          "sim_hi": 65.58092715667594,
+          "rel_gap": -0.02600737737624337,
+          "tolerance": 0.1,
+          "intervals_overlap": false,
+          "consistent": true
+        },
+        {
+          "metric": "player_spm",
+          "label": "player swings / min",
+          "ue": 26.08176833252834,
+          "ue_lo": 24.210346876398255,
+          "ue_hi": 28.01090491309457,
+          "sim": 7.048890021298241,
+          "sim_lo": 6.558936702992816,
+          "sim_hi": 7.571175762824124,
+          "rel_gap": 2.7001241690141575,
+          "tolerance": 0.15,
+          "intervals_overlap": false,
+          "consistent": false
+        },
+        {
+          "metric": "hit_rate",
+          "label": "keeper hit rate",
+          "ue": 0.44301765650080255,
+          "ue_lo": 0.4121122599704579,
+          "ue_hi": 0.48771929824561405,
+          "sim": 0.47307654026077434,
+          "sim_lo": 0.4674006002651478,
+          "sim_hi": 0.4787066433304176,
+          "rel_gap": -0.06353915529906093,
+          "tolerance": 0.1,
+          "intervals_overlap": true,
+          "consistent": true
+        },
+        {
+          "metric": "whiff_rate",
+          "label": "keeper whiff rate",
+          "ue": 0.2841091492776886,
+          "ue_lo": 0.23934426229508196,
+          "ue_hi": 0.31911532385466035,
+          "sim": 0.28819548123818056,
+          "sim_lo": 0.2823217817553152,
+          "sim_hi": 0.29388326651798885,
+          "rel_gap": -0.014179028564000258,
+          "tolerance": 0.25,
+          "intervals_overlap": true,
+          "consistent": true
+        },
+        {
+          "metric": "blocked_rate",
+          "label": "blocked rate",
+          "ue": 0.06741573033707865,
+          "ue_lo": 0.051418439716312055,
+          "ue_hi": 0.0806697108066971,
+          "sim": 0.08445307056832886,
+          "sim_lo": 0.08052999361552654,
+          "sim_hi": 0.08795306983776603,
+          "rel_gap": -0.20173736865453254,
+          "tolerance": 0.2,
+          "intervals_overlap": true,
+          "consistent": true
+        },
+        {
+          "metric": "parried_rate",
+          "label": "parried rate",
+          "ue": 0.08186195826645265,
+          "ue_lo": 0.05714169191330692,
+          "ue_hi": 0.1135593220338983,
+          "sim": 0.09978102916293421,
+          "sim_lo": 0.09583108929792143,
+          "sim_hi": 0.10355061753828061,
+          "rel_gap": -0.17958394543336686,
+          "tolerance": 0.2,
+          "intervals_overlap": true,
+          "consistent": true
+        },
+        {
+          "metric": "reads_min",
+          "label": "read counters / min",
+          "ue": 0.0,
+          "ue_lo": 0.0,
+          "ue_hi": 0.0,
+          "sim": 0.0,
+          "sim_lo": 0.0,
+          "sim_hi": 0.0,
+          "rel_gap": NaN,
+          "tolerance": 0.2,
+          "intervals_overlap": true,
+          "consistent": true
+        },
+        {
+          "metric": "fight_s",
+          "label": "fight length (s)",
+          "ue": 32.589814814814815,
+          "ue_lo": 29.821296296296296,
+          "ue_hi": 34.93611111111111,
+          "sim": 30.714055595397948,
+          "sim_lo": 30.24762087980906,
+          "sim_hi": 31.181432778994242,
+          "rel_gap": 0.061071687963536875,
+          "tolerance": 0.15,
+          "intervals_overlap": true,
+          "consistent": true
+        },
+        {
+          "metric": "player_death_rate",
+          "label": "player deaths / fight",
+          "ue": 1.0,
+          "ue_lo": 1.0,
+          "ue_hi": 1.0,
+          "sim": 1.0,
+          "sim_lo": 1.0,
+          "sim_hi": 1.0,
+          "rel_gap": 0.0,
+          "tolerance": 0.1,
+          "intervals_overlap": true,
+          "consistent": true
+        },
+        {
+          "metric": "distance",
+          "label": "distance at keeper commits",
+          "ue": 230.58667315175097,
+          "ue_lo": 225.7315883630864,
+          "ue_hi": 234.86467289719624,
+          "sim": 232.55410772000172,
+          "sim_lo": 231.57361931476785,
+          "sim_hi": 233.51953887076937,
+          "rel_gap": -0.008460115314839202,
+          "tolerance": 0.1,
+          "intervals_overlap": true,
+          "consistent": true
+        }
+      ],
+      "move_mix": {
+        "js_bits": 0.0018146144329635877,
+        "ue_top": [
+          [
+            "FastSlash",
+            0.23540856031128404
+          ],
+          [
+            "Approach",
+            0.2140077821011673
+          ],
+          [
+            "HeavyCleave",
+            0.0914396887159533
+          ],
+          [
+            "SweepLeft",
+            0.05058365758754864
+          ]
+        ],
+        "sim_top": [
+          [
+            "FastSlash",
+            0.24740965377811475
+          ],
+          [
+            "Approach",
+            0.1766173869092747
+          ],
+          [
+            "HeavyCleave",
+            0.0948003538033864
+          ],
+          [
+            "SweepLeft",
+            0.05354435178165277
+          ]
+        ]
+      },
+      "ue_sessions": 6,
+      "sim_sessions": 200,
+      "ue_fights": 18,
+      "sim_fights": 600
+    },
+    "ue_real_seconds": 168.16000000000003
+  }
+]

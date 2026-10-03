@@ -52,7 +52,7 @@ TOL = 1e-4
 CPP_MASKED = -1.0e30
 
 # HWRLTypes.h: a boss policy must have exactly these (the C++ loader checks).
-OBS_DIM, NUM_ACTIONS, AUX, K_TOK, F_TOK = 103, 23, 12, 32, 6
+OBS_DIM, NUM_ACTIONS, AUX, K_TOK, F_TOK = 107, 23, 12, 32, 6
 VOCAB = np.array(M.DEFAULT_TOKEN_VOCAB, dtype=np.int64)
 WAIT = NUM_ACTIONS - 1
 
@@ -352,7 +352,7 @@ def test_roundtrip(seed: int = 2) -> None:
         for k, v in expected.items():
             assert tensors[k].shape == v.shape and np.array_equal(tensors[k], v), f"{name}: {k} differs after load"
         meta = {k: float(tensors[k][0]) for k in E.META_KEYS}
-        assert meta == {"meta.obs_layout_version": 2.0, "meta.obs_dim": 103.0, "meta.num_actions": 23.0,
+        assert meta == {"meta.obs_layout_version": 3.0, "meta.obs_dim": 107.0, "meta.num_actions": 23.0,
                         "meta.aux_classes": 12.0, "meta.enc_hidden": float(enc), "meta.embed_dim": float(emb),
                         "meta.hidden": float(hid), "meta.recurrent": 1.0 if rec else 0.0,
                         "meta.history_tokens": 32.0, "meta.token_fields": 6.0, "meta.side": 0.0}, meta
@@ -372,7 +372,7 @@ def test_roundtrip(seed: int = 2) -> None:
     # checkpoint convention + the CLI
     net = make_net(True, 64, 16, 40, gen)
     ckpt = os.path.join(TMP, "rt.pt")
-    extra = {"step": 123, "lr": 3e-4, "obs_layout_version": 2, "nested": {"band": [0, 1], "arr": np.arange(3.0)},
+    extra = {"step": 123, "lr": 3e-4, "obs_layout_version": 3, "nested": {"band": [0, 1], "arr": np.arange(3.0)},
              "scalar": np.float32(0.5), "t": torch.ones(2), "tup": (1, "a")}
     M.save_checkpoint(ckpt, net, extra)
     net2, extra2 = M.load_checkpoint(ckpt)

@@ -36,11 +36,13 @@ namespace HW
 		class FRLArm : public FSimArm
 		{
 		public:
-			bool Load(const char* Path)
+			bool Load(const char* Path, float Skill, int32_t Identity)
 			{
 				if (Path == nullptr) { std::printf("--brain rl needs --policy <file.hwrl>\n"); return false; }
 				if (!Policy.LoadFromFile(Path)) { std::printf("cannot load %s: %s\n", Path, Policy.GetError().c_str()); return false; }
-				std::snprintf(LabelBuf, sizeof(LabelBuf), "Hellwalker (RL)");
+				if (!Policy.IsBossPlayable()) { std::printf("%s is not a playable boss policy (side / layout / hidden size)\n", Path); return false; }
+				Brain.Configure(Skill, Identity);
+				std::snprintf(LabelBuf, sizeof(LabelBuf), "Hellwalker (RL, %s, skill %.2f)", RL::KeeperName(Identity), Skill);
 				Session.Reset();
 				return true;
 			}
@@ -49,7 +51,9 @@ namespace HW
 			FEncounterStats Run(const FRunConfig& Run, std::vector<FExchangeRow>* Rows) override
 			{
 				Brain.Bind(&Policy, &Session);
-				return RunEncounter(Brain, Run, Rows);
+				FRunConfig Cfg = Run;
+				Cfg.BossHealthScale = RL::KeeperHealthScale(Brain.Observer().Config.Identity); // as in training (mortal runs)
+				return RunEncounter(Brain, Cfg, Rows);
 			}
 
 		private:
@@ -60,13 +64,17 @@ namespace HW
 		};
 	}
 
-	std::unique_ptr<FSimArm> MakeAdaptiveArm(const char* Name, const char* PolicyPath, int32_t ScriptIndex, bool bDerivedPayoffs)
+	std::unique_ptr<FSimArm> MakeAdaptiveArm(const char* Name, const char* PolicyPath, int32_t ScriptIndex, bool bDerivedPayoffs,
+		float KeeperSkill, int32_t KeeperIdentity)
 	{
 		if (std::strcmp(Name, "classic") == 0) { return std::make_unique<FClassicArm>(ScriptIndex, bDerivedPayoffs); }
 		if (std::strcmp(Name, "rl") == 0)
 		{
+			// The keeper follows the script by default: script 0 is the Warden's, script 1 the Sage's (the Returned
+			// Warden plays script 0 in Pathbreaker; ask for it with --identity 2).
+			const int32_t Identity = KeeperIdentity >= 0 ? KeeperIdentity : (ScriptIndex == 1 ? 1 : 0);
 			std::unique_ptr<FRLArm> Arm = std::make_unique<FRLArm>();
-			if (!Arm->Load(PolicyPath)) { return nullptr; }
+			if (!Arm->Load(PolicyPath, KeeperSkill, Identity)) { return nullptr; }
 			return Arm;
 		}
 		std::printf("unknown --brain %s (classic | rl)\n", Name);

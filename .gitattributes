@@ -1,3 +1,5 @@
 # Binary Unreal assets go through LFS (PLAN §7). Phases A-B have none: everything is built in C++.
 *.uasset filter=lfs diff=lfs merge=lfs -text
 *.umap filter=lfs diff=lfs merge=lfs -text
+# Windows batch files need CRLF (cmd mis-parses labels in LF-only files).
+*.bat text eol=crlf

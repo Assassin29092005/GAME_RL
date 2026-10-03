@@ -15,7 +15,7 @@ namespace
 		return FVector2D::Distance(P, A + AB * OutT);
 	}
 
-	constexpr double M = 100.0; // metres -> cm
+	constexpr double MetresToCm = 100.0; // (not "M": unity builds paste this file next to others with locals named M)
 }
 
 const TArray<FHWShrineSpec>& FHWWorldGen::Shrines()
@@ -68,8 +68,8 @@ void FHWWorldGen::Layout()
 		S.Kind = Kind;
 		S.Id = Id;
 		S.Title = Title;
-		S.Pos = FVector2D(Xm, Ym) * M;
-		S.Radius = Rm * M;
+		S.Pos = FVector2D(Xm, Ym) * MetresToCm;
+		S.Radius = Rm * MetresToCm;
 		S.Index = Index;
 		S.Height = LowFrequency(S.Pos.X, S.Pos.Y);
 		return Sites.Add(S);

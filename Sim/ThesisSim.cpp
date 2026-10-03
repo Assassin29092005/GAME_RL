@@ -223,6 +223,8 @@ int main(int Argc, char** Argv)
 	const char* CsvPath = nullptr;
 	const char* BrainName = "classic";
 	const char* PolicyPath = nullptr;
+	float KeeperSkill = 1.f;
+	int32_t KeeperIdentity = -1; // -1: follows the script (0 Warden, 1 Sage)
 	bool bTests = false;
 	bool bAuthored = false;
 	int32_t DiagKind = -1;
@@ -238,6 +240,8 @@ int main(int Argc, char** Argv)
 		else if (std::strcmp(Argv[I], "--script") == 0 && I + 1 < Argc) { GScript = std::atoi(Argv[++I]); }
 		else if (std::strcmp(Argv[I], "--brain") == 0 && I + 1 < Argc) { BrainName = Argv[++I]; }
 		else if (std::strcmp(Argv[I], "--policy") == 0 && I + 1 < Argc) { PolicyPath = Argv[++I]; }
+		else if (std::strcmp(Argv[I], "--skill") == 0 && I + 1 < Argc) { KeeperSkill = static_cast<float>(std::atof(Argv[++I])); }
+		else if (std::strcmp(Argv[I], "--identity") == 0 && I + 1 < Argc) { KeeperIdentity = std::atoi(Argv[++I]); }
 		else if (std::strcmp(Argv[I], "--diag") == 0 && I + 2 < Argc)
 		{
 			DiagKind = std::atoi(Argv[I + 1]);
@@ -249,7 +253,7 @@ int main(int Argc, char** Argv)
 	if (bTests) { return RunTests(); }
 
 	FScriptArm Script(GScript);
-	std::unique_ptr<FSimArm> Adaptive = MakeAdaptiveArm(BrainName, PolicyPath, GScript, !bAuthored);
+	std::unique_ptr<FSimArm> Adaptive = MakeAdaptiveArm(BrainName, PolicyPath, GScript, !bAuthored, KeeperSkill, KeeperIdentity);
 	if (!Adaptive) { return 3; }
 	if (DiagKind >= 0) { return RunDiag(Script, *Adaptive, static_cast<EBotKind>(DiagKind), DiagSkill, bDiagLethal); }
 

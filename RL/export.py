@@ -40,7 +40,7 @@ HWRL_VERSION = 1
 # RL::ObsLayoutVersion (HWRLTypes.h). The C++ loader refuses a file whose layout differs from the build's. A trainer
 # that knows better (hwcore.hwrl_obs_layout_version() at training time) stores it in the checkpoint's extra
 # ("obs_layout_version") and the CLI writes that instead.
-OBS_LAYOUT_VERSION = 2
+OBS_LAYOUT_VERSION = 3
 
 # The .hwrl names of the scalars, in the order HWRLPolicy.h lists them.
 META_KEYS = ("meta.obs_layout_version", "meta.obs_dim", "meta.num_actions", "meta.aux_classes", "meta.enc_hidden",

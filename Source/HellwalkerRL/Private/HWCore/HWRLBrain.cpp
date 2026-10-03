@@ -7,9 +7,50 @@
 
 namespace HW
 {
+	int32_t FRLNotebook::ClassOf(EMoveId M)
+	{
+		if (M == EMoveId::None) { return -1; }
+		const int32_t C = SymIndex(Move(M).Symbol) - SymIndex(ESym::BFast);
+		return C >= 0 && C < Classes ? C : -1;
+	}
+
+	void FRLBrain::FlushNotebook()
+	{
+		if (Notebook == nullptr || PendingClass < 0) { PendingClass = -1; return; }
+		// The window of the last decision is complete once the next decision (or the fight's end) comes: ground truth.
+		const int32_t Label = Obs.AnswerToLastDecision();
+		if (Label >= 0 && Label < NumPlayerSymbols)
+		{
+			FRLNotebook& N = *Notebook;
+			++N.Answers[PendingClass][Label];
+			++N.Predicted[PendingClass][SymIndex(PendingPredicted)];
+			const bool bRight = SymIndex(PendingPredicted) == Label;
+			++N.Predictions;
+			N.Correct += bRight ? 1 : 0;
+			if (PendingP >= RL::ReadMeterMinP)
+			{
+				++N.Confident;
+				N.ConfidentCorrect += bRight ? 1 : 0;
+			}
+			const int32_t F = PendingFight < FRLNotebook::MaxFights ? PendingFight : FRLNotebook::MaxFights - 1;
+			++N.FightPredictions[F];
+			N.FightCorrect[F] += bRight ? 1 : 0;
+		}
+		PendingClass = -1;
+	}
+
+	bool FRLBrain::PopReadMeter(FReadMeterEvent& Out)
+	{
+		if (!Obs.PopReadMeter(Out)) { return false; }
+		if (Notebook != nullptr) { ++Notebook->ReadsLanded; }
+		return true;
+	}
+
 	void FRLBrain::BeginEncounter(int32_t Seed)
 	{
-		(void)Seed; // greedy play (RL.md §8): the keeper has no randomness at all; the session carries its memory
+		// Greedy play (RL.md §8) has no randomness; the easiest difficulties sample, seeded by the fight (reproducible).
+		Rng.Initialize(static_cast<int32_t>(static_cast<uint32_t>(Seed) * 31u + 7u)); // unsigned: no signed overflow
+		FlushNotebook(); // the previous fight's last decision (the observer still holds its window)
 		bBegun = false;
 		DecisionCount = 0;
 		Last = FBrainDecision{};
@@ -27,16 +68,12 @@ namespace HW
 			Obs.BeginEncounter(Session, Duel, Geo);
 			BeginGeo = Geo;
 			bBegun = true;
+			if (Notebook != nullptr) { ++Notebook->Fights; }
 		}
+		// IsReady() requires a playable boss policy (a player-side exploiter, another layout, or a memory bigger than a
+		// session holds never plays; the game checks the same before binding this brain and falls back to the script).
 		if (!IsReady() || !Obs.IsDecisionPoint(Duel)) { return false; }
-		// A policy this observer cannot feed (a player-side exploiter, or a memory bigger than the session holds) never
-		// plays: refusing is safer than reading past a buffer.
 		const int32_t H = Policy->HiddenSize();
-		if (Policy->Side() != 0 || Policy->ObsDim() != RL::ObsDim || Policy->NumActions() != RL::NumActions
-			|| H <= 0 || H > FRLSession::MaxHidden)
-		{
-			return false;
-		}
 
 		Obs.BuildObservation(Duel, ObsBuf, TokBuf);
 		Obs.BuildMask(Duel, MaskBuf);
@@ -45,8 +82,31 @@ namespace HW
 			for (float& V : Session->Hidden) { V = 0.f; }
 			Session->HiddenSize = H;
 		}
-		Policy->Forward(ObsBuf, TokBuf, MaskBuf, Session->Hidden, Session->Hidden, LastOut);
+		FlushNotebook(); // the previous decision's window is complete now
+		if (static_cast<int32_t>(Scratch.size()) < Policy->ScratchSize()) { Scratch.assign(static_cast<size_t>(Policy->ScratchSize()), 0.f); }
+		Policy->Forward(ObsBuf, TokBuf, MaskBuf, Session->Hidden, Session->Hidden, LastOut, Scratch.data());
 		int32_t A = LastOut.Argmax;
+		if (Temperature > 0.f)
+		{
+			// Sample from softmax(logits / T) over the allowed actions (the trained policy is a sampler; greedy is its
+			// sharpest form). One draw per decision from the fight's stream.
+			float W[FRLPolicyOutput::MaxActions] = {};
+			float Sum = 0.f;
+			const float Best = LastOut.Argmax >= 0 ? LastOut.Logits[LastOut.Argmax] : 0.f;
+			for (int32_t I = 0; I < RL::NumActions; ++I)
+			{
+				W[I] = MaskBuf[I] != 0 ? std::exp((LastOut.Logits[I] - Best) / Temperature) : 0.f;
+				Sum += W[I];
+			}
+			float R = Rng.FRand() * Sum;
+			for (int32_t I = 0; I < RL::NumActions && Sum > 0.f; ++I)
+			{
+				if (W[I] <= 0.f) { continue; }
+				A = I;
+				if (R < W[I]) { break; }
+				R -= W[I];
+			}
+		}
 		if (A < 0 || A >= RL::NumActions) { A = RL::ActionWait; }
 
 		// The read head, for the action about to be taken: what it expects the player to answer.
@@ -114,8 +174,15 @@ namespace HW
 		const int32_t Second = D.NumTop > 1 ? (Picked[0] == A ? Picked[1] : Picked[0]) : -1;
 		char Alt[48] = {};
 		if (Second >= 0) { std::snprintf(Alt, sizeof(Alt), " (%s %.2f)", RL::ActionName(Second), LastOut.Probs[Second]); }
-		std::snprintf(D.Reason, sizeof(D.Reason), "policy %s p=%.2f%s | read %s %.2f | V %+.2f%s", RL::ActionName(A),
-			LastOut.Probs[A], Alt, SymName(Read.Predicted), Read.P, LastOut.Value, D.bArgmaxHolds ? "" : " | refused -> Wait");
+		std::snprintf(D.Reason, sizeof(D.Reason), "policy %s p=%.2f%s | read %s %.2f | V %+.2f%s%s", RL::ActionName(A),
+			LastOut.Probs[A], Alt, SymName(Read.Predicted), Read.P, LastOut.Value, A != LastOut.Argmax ? " | sampled" : "",
+			D.bArgmaxHolds ? "" : " | refused -> Wait");
+
+		// The notebook waits for this decision's answer (Waits teach it nothing about your answers to its moves).
+		PendingClass = FRLNotebook::ClassOf(Taken);
+		PendingPredicted = Read.Predicted;
+		PendingP = Read.P;
+		PendingFight = Session->FightIndex;
 
 		++DecisionCount;
 		Last = D;

@@ -1,0 +1,71 @@
+# HellwalkerRL — continuous integration for everything that builds without Unreal Engine.
+#
+# The engine-free core (Source/HellwalkerRL/*/HWCore) is compiled here with plain MSVC and the warnings Unreal treats
+# as errors, exactly as Sim\build.bat / RL\native\build.bat do on the dev machine, then:
+#   * the core test suite (combat rules, the scripted keeper, the RL keeper's senses/masks/memory, the classic benchmark)
+#   * the training environment benchmark (determinism across thread counts, masks never allow an illegal move, rollover)
+#   * PyTorch <-> C++ <-> ONNX parity of the keeper's network (the game runs the C++ forward pass)
+#   * the trainer's self-tests (GAE by hand, rollout/sequence ratio = 1, the vector env)
+# The Unreal build (Tools\Build.bat) and the automation tests (Tools\Test.bat) need the 5.8 engine and the Fab packs:
+# they stay local. Tools\CI.bat runs the steps below on a dev machine.
+
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  core:
+    name: Engine-free core, training env, network parity
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: false   # maps / generated materials are not needed here (and would cost LFS bandwidth)
+
+      - name: Build ThesisSim (the core with Unreal's warnings-as-errors)
+        shell: cmd
+        run: Sim\build.bat
+
+      - name: Core tests
+        shell: cmd
+        run: Sim\out\ThesisSim.exe --tests
+
+      - name: Build hwrl.dll + envbench
+        shell: cmd
+        run: RL\native\build.bat
+
+      - name: Environment benchmark (determinism, masks, rollover, attack log)
+        shell: cmd
+        run: RL\native\out\envbench.exe 1024 300 Content\HellwalkerRL\RL\hellwalker_rl.hwrl
+
+      - name: Build the policy parity harness
+        shell: cmd
+        run: RL\native\build_harness.bat
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Python dependencies (CPU PyTorch)
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install numpy onnx onnxruntime
+          python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
+
+      - name: Network parity (PyTorch vs C++ vs ONNX)
+        run: python RL/tests/test_parity.py
+
+      - name: Trainer self-tests
+        run: |
+          python RL/ppo_rnn.py --selftest --device cpu
+          python RL/env.py
+          python RL/players.py

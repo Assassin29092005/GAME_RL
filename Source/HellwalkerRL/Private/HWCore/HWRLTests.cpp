@@ -623,7 +623,7 @@ namespace HW
 			int32_t Unnamed = 0;
 			for (int32_t I = 0; I < RL::ObsDim; ++I) { if (std::strcmp(RL::ObsFeatureName(I), "?") == 0) { ++Unnamed; } }
 			const int32_t Vocab[RL::TokenFields] = { 10, 13, 6, 5, 10, 4 };
-			bool bLayout = RL::NumActions == 23 && RL::ActionWait == 22 && RL::ObsDim == 103 && RL::HistoryTokens == 32
+			bool bLayout = RL::NumActions == 23 && RL::ActionWait == 22 && RL::ObsDim == 107 && RL::HistoryTokens == 32
 				&& RL::TokenFields == 6 && RL::NumAnswerClasses == 12;
 			for (int32_t F = 0; F < RL::TokenFields; ++F) { bLayout = bLayout && RL::TokenVocab[F] == Vocab[F]; }
 			Logf(Log, "%d actions = %d boss moves (%s .. %s) + %s: %d round-trip/owner/name errors, %d non-boss moves mapped",
@@ -1149,10 +1149,10 @@ namespace HW
 		}
 
 		/** The fixture the brain plays with: small, recurrent, and decisive enough to vary its actions. */
-		bool LoadBrainFixture(FRLPolicy& Pol)
+		bool LoadBrainFixture(FRLPolicy& Pol, int32_t Seed = 4715)
 		{
 			FFixtureSpec Spec;
-			Spec.Seed = 4711;
+			Spec.Seed = Seed;
 			Spec.Enc = 32;
 			Spec.Embed = 8;
 			Spec.Hidden = 16;
@@ -1345,6 +1345,345 @@ namespace HW
 			return bOk;
 		}
 
+		// ------------------------------------------------------------------------------------------
+		// Layout 3: difficulty, identity, learning players, the notebook
+		// ------------------------------------------------------------------------------------------
+
+		/** First boss attack with a cancel window (a chained attack can follow it). */
+		int32_t ChainableAttack()
+		{
+			for (int32_t A = 0; A < RL::NumBossMoves; ++A)
+			{
+				const FMoveData& M = Move(RL::ActionMove(A));
+				if (M.IsAttack() && M.CancelFrame > 0 && M.CancelFrame < M.TotalFrames() && M.Range >= 120.f) { return A; }
+			}
+			return -1;
+		}
+
+		/** Attacks the mask allows once the keeper is in the cancel window of a first attack, at a given skill. */
+		int32_t AttacksAllowedInChain(float Skill, int32_t First)
+		{
+			FHandDuel H;
+			H.Obs.Config.Skill = Skill;
+			H.Begin(120.f);
+			if (!H.Obs.IsDecisionPoint(H.Duel)) { return -1; }
+			H.Obs.ApplyAction(H.Duel, First);
+			for (int32_t F = 0; F < 120; ++F)
+			{
+				H.Step();
+				const FFighter& B = H.Duel.Get(ESide::Boss);
+				if (B.State == EFighterState::Acting && B.CurrentMove().IsAttack() && B.IsActionable())
+				{
+					uint8_t Mask[RL::NumActions];
+					H.Obs.BuildMask(H.Duel, Mask);
+					int32_t N = 0;
+					for (int32_t A = 0; A < RL::NumBossMoves; ++A) { N += (Mask[A] != 0 && Move(RL::ActionMove(A)).IsAttack()) ? 1 : 0; }
+					return N;
+				}
+			}
+			return -1;
+		}
+
+		bool TestSkill(std::string& Log)
+		{
+			// 1. Skill 1 reproduces the fixed constants; skill 0 is the slowest keeper; every knob moves one way.
+			const RL::FSkillParams Full = RL::SkillParams(1.f);
+			const RL::FSkillParams Zero = RL::SkillParams(0.f);
+			const bool bFull = Full.Perception == RL::PerceptionFrames && Full.DecisionGap == RL::DecisionGapFrames
+				&& Full.MaxString == RL::MaxStringAttacks && Full.GrabCooldown == RL::GrabCooldownFrames
+				&& Full.KillerCooldown == RL::KillerCooldownFrames && RL::TargetSwingsPerMin(66.f, 1.f) == 66.f;
+			const bool bZero = Zero.Perception == RL::MaxPerceptionFrames && Zero.DecisionGap == 12 && Zero.MaxString == 1
+				&& Zero.GrabCooldown == 2 * RL::GrabCooldownFrames && Zero.KillerCooldown == 2 * RL::KillerCooldownFrames
+				&& RL::TargetSwingsPerMin(66.f, 0.f) == 50.f;
+			bool bMono = true;
+			RL::FSkillParams Prev = Zero;
+			for (int32_t I = 1; I <= 20; ++I)
+			{
+				const RL::FSkillParams P = RL::SkillParams(static_cast<float>(I) / 20.f);
+				bMono = bMono && P.Perception <= Prev.Perception && P.DecisionGap <= Prev.DecisionGap && P.MaxString >= Prev.MaxString
+					&& P.GrabCooldown <= Prev.GrabCooldown && P.KillerCooldown <= Prev.KillerCooldown;
+				Prev = P;
+			}
+			const bool bClamp = RL::SkillParams(-3.f).Perception == Zero.Perception && RL::SkillParams(7.f).Perception == Full.Perception;
+			Logf(Log, "skill 1: perception %d, gap %d, strings %d, grab %d, killer %d (the fixed constants: %s); skill 0: %d, %d, %d, %d, %d (%s); monotone %s, clamped %s",
+				Full.Perception, Full.DecisionGap, Full.MaxString, Full.GrabCooldown, Full.KillerCooldown, bFull ? "yes" : "NO",
+				Zero.Perception, Zero.DecisionGap, Zero.MaxString, Zero.GrabCooldown, Zero.KillerCooldown, bZero ? "ok" : "WRONG",
+				bMono ? "yes" : "NO", bClamp ? "yes" : "NO");
+
+			// 2. At skill 0 a commitment at frame e is invisible at D = e + 16 and visible at e + 17; the keeper inputs say
+			//    who it is and how hard it plays.
+			bool bLate = true;
+			bool bKeeper = true;
+			{
+				FHandDuel H;
+				H.Obs.Config.Skill = 0.f;
+				H.Obs.Config.Identity = 2;
+				H.Begin(400.f);
+				const int32_t Commit = 30;
+				const int32_t Acting = RL::ObsPlayerState + static_cast<int32_t>(EFighterState::Acting);
+				float O[RL::ObsDim];
+				for (int32_t F = 0; F <= 60; ++F)
+				{
+					H.Obs.BuildObservation(H.Duel, O, nullptr);
+					if (F == 0)
+					{
+						bKeeper = O[RL::ObsSkill] == 0.f && O[RL::ObsIdentity + 2] == 1.f && O[RL::ObsIdentity] == 0.f && O[RL::ObsIdentity + 1] == 0.f;
+					}
+					if (F == Commit + RL::MaxPerceptionFrames || F == Commit + RL::MaxPerceptionFrames + 1)
+					{
+						const bool bSeen = F == Commit + RL::MaxPerceptionFrames + 1;
+						bLate = bLate && O[Acting] == (bSeen ? 1.f : 0.f);
+					}
+					if (F == Commit) { bLate = bLate && H.Duel.CommitPlayerAttack(false); }
+					H.Step();
+				}
+				FHandDuel W;
+				W.Obs.Config.Identity = 7; // out of range -> the Warden
+				W.Begin(400.f);
+				W.Obs.BuildObservation(W.Duel, O, nullptr);
+				bKeeper = bKeeper && O[RL::ObsIdentity] == 1.f && O[RL::ObsSkill] == 1.f;
+			}
+			Logf(Log, "skill 0, identity Returned: a swing at frame 30 is hidden at frame 46 and seen at 47 -> %s; keeper inputs (skill, one-hot identity, out-of-range -> Warden) -> %s",
+				bLate ? "ok" : "WRONG", bKeeper ? "ok" : "WRONG");
+
+			// 3. Skill 0 decides every 12 frames and strings a single attack; skill 1 every 6 and may chain.
+			bool bGap = true;
+			{
+				FHandDuel H;
+				H.Obs.Config.Skill = 0.f;
+				H.Begin(400.f);
+				bGap = H.Obs.IsDecisionPoint(H.Duel);
+				H.Obs.ApplyAction(H.Duel, RL::ActionWait);
+				for (int32_t F = 1; F <= 12; ++F)
+				{
+					H.Step();
+					bGap = bGap && H.Obs.IsDecisionPoint(H.Duel) == (F == 12);
+				}
+			}
+			const int32_t First = ChainableAttack();
+			const int32_t Chain1 = First >= 0 ? AttacksAllowedInChain(1.f, First) : -1;
+			const int32_t Chain0 = First >= 0 ? AttacksAllowedInChain(0.f, First) : -1;
+			const bool bChain = Chain1 > 0 && Chain0 == 0;
+			Logf(Log, "skill 0: next decision exactly 12 frames after a Wait -> %s; in %s's cancel window the mask allows %d chained attacks at skill 1, %d at skill 0 -> %s",
+				bGap ? "ok" : "WRONG", First >= 0 ? RL::ActionName(First) : "?", Chain1, Chain0, bChain ? "ok" : "WRONG");
+			return bFull && bZero && bMono && bClamp && bLate && bKeeper && bGap && bChain;
+		}
+
+		bool TestBreather(std::string& Log)
+		{
+			// The game's Easy breather (FRLConfig::MinSwingGap): after a swing, attack OPENERS stay masked until that many
+			// frames have passed, while guarding and moving stay allowed; with no breather it may open again as soon as it
+			// is free. Skill 0 (Easy's): single-attack strings, so no cancel window muddies the count.
+			struct FResult { int32_t Swing = -1; int32_t Free = -1; int32_t Open = -1; bool bOthers = true; };
+			auto Run = [](int32_t Gap)
+			{
+				FResult R;
+				FHandDuel H;
+				H.Obs.Config.Skill = 0.f;
+				H.Obs.Config.MinSwingGap = Gap;
+				H.Begin(250.f);
+				const int32_t A = RL::MoveAction(EMoveId::BFastSlash);
+				uint8_t Mask[RL::NumActions];
+				H.Obs.BuildMask(H.Duel, Mask);
+				if (Mask[A] == 0 || H.Obs.ApplyAction(H.Duel, A) != EMoveId::BFastSlash) { return R; }
+				R.Swing = H.Duel.Frame;
+				for (int32_t F = 0; F < 400 && R.Open < 0; ++F)
+				{
+					H.Step();
+					if (H.Duel.Get(ESide::Boss).State == EFighterState::Acting) { continue; }
+					if (R.Free < 0) { R.Free = H.Duel.Frame; }
+					H.Obs.BuildMask(H.Duel, Mask);
+					R.bOthers = R.bOthers && Mask[RL::MoveAction(EMoveId::BGuard)] == 1 && Mask[RL::MoveAction(EMoveId::BRetreat)] == 1;
+					if (Mask[A] == 1) { R.Open = H.Duel.Frame; }
+				}
+				return R;
+			};
+			const int32_t Gap = RL::EasySwingGap;
+			const FResult Off = Run(0);
+			const FResult On = Run(Gap);
+			const bool bOff = Off.Swing >= 0 && Off.Open == Off.Free && Off.Open - Off.Swing < Gap;
+			const bool bOn = On.Swing >= 0 && On.Open - On.Swing == Gap && On.bOthers;
+			Logf(Log, "a fast slash at frame %d: free again at %d; no breather -> it may open at %d (%s); Easy's %d-frame breather -> at %d, guarding and retreating allowed meanwhile (%s)",
+				Off.Swing, Off.Free, Off.Open, bOff ? "ok" : "WRONG", Gap, On.Open, bOn ? "ok" : "WRONG");
+			return bOff && bOn;
+		}
+
+		/** A keeper that only throws one move (and walks in until it can): the player's lesson is unambiguous. */
+		class FOneMoveBrain : public IBossBrain
+		{
+		public:
+			EMoveId Attack = EMoveId::BSweepLeft;
+			EBrainMode Mode() const override { return EBrainMode::Pathbreaker; }
+			const char* Name() const override { return "one move"; }
+			void BeginEncounter(int32_t Seed) override { (void)Seed; }
+			bool Think(FDuel& Duel, const FDuelGeometry& Geo, FBrainDecision* OutDecision) override
+			{
+				(void)OutDecision;
+				if (!Duel.Get(ESide::Boss).IsActionable()) { return false; }
+				if (Geo.Distance() <= Move(Attack).Range) { Duel.Commit(ESide::Boss, Attack); }
+				else { Duel.Commit(ESide::Boss, EMoveId::BApproach); }
+				return false;
+			}
+			void OnFrame(const std::vector<FDuelEvent>& Events, const FDuel& Duel, const FDuelGeometry& Geo, ESym PlayerMovement) override
+			{
+				(void)Events; (void)Duel; (void)Geo; (void)PlayerMovement;
+			}
+			bool PopReadMeter(FReadMeterEvent& Out) override { (void)Out; return false; }
+			const FBrainDecision& LastDecision() const override { return None; }
+			int32_t Decisions() const override { return 0; }
+			int32_t CountersLanded() const override { return 0; }
+		private:
+			FBrainDecision None;
+		};
+
+		/** A step-left habit player vs FOneMoveBrain for 120 s: its share of step-left answers early (swings 1-8) and late (31+). */
+		void LearningRun(float LearnRate, FBotMemory* Memory, int32_t Seed, float& OutEarly, float& OutLate, int32_t& OutSwings,
+			EMoveId Attack = EMoveId::BSweepLeft, float* OutHitRate = nullptr)
+		{
+			FBotProfile P = MakeBotProfile(EBotKind::Varied, 0.8f);
+			P.Kind = EBotKind::Habit;
+			for (int32_t C = 0; C < FBotProfile::HabitClasses; ++C) { P.Habit[0][C][2] = 1.f; P.Habit[1][C][2] = 1.f; } // always StepL
+			P.HabitNoise = 0.f;
+			P.bAdapts = false;
+			P.AggroRate = 0.f;
+			P.PunishRate = 0.f;
+			P.LearnRate = LearnRate;
+			FOneMoveBrain Brain;
+			Brain.Attack = Attack;
+			FEncounter Enc;
+			Enc.bRecordRows = false;
+			Enc.Begin(&Brain, Seed, true);
+			FSimArena Arena;
+			Arena.Reset(300.f);
+			FPlayerBot Bot;
+			Bot.Reset(P, Seed * 7919 + 17);
+			Bot.SetMemory(Memory);
+			int32_t Swings = 0;
+			int32_t EarlyL = 0, EarlyN = 0, LateL = 0, LateN = 0;
+			bool bAnswered = true;
+			for (int32_t F = 0; F < 120 * FramesPerSecond; ++F)
+			{
+				Enc.ThinkBoss(Arena.Geometry());
+				float Fwd = 0.f;
+				float Lat = 0.f;
+				Bot.Act(Enc.Duel, Arena, Fwd, Lat);
+				Arena.LatchCommits(Enc.Duel);
+				Arena.SnapshotPreStep(Enc.Duel);
+				Enc.StepFrame(Arena, Bot.MovementSym());
+				Bot.OnEvents(Enc.FrameEvents(), Enc.Duel);
+				Arena.Integrate(Enc.Duel, Fwd, Lat);
+				for (const FDuelEvent& E : Enc.FrameEvents())
+				{
+					if (E.Type == EDuelEvent::Commit && E.Side == ESide::Boss && Move(E.Move).IsAttack()) { ++Swings; bAnswered = false; }
+					if (E.Type == EDuelEvent::Commit && E.Side == ESide::Player && !bAnswered && Swings > 0)
+					{
+						bAnswered = true;
+						const bool bLeft = E.Sym == ESym::StepL;
+						if (Swings <= 8) { ++EarlyN; EarlyL += bLeft ? 1 : 0; }
+						else if (Swings > 30) { ++LateN; LateL += bLeft ? 1 : 0; }
+					}
+				}
+			}
+			OutEarly = EarlyN > 0 ? static_cast<float>(EarlyL) / static_cast<float>(EarlyN) : -1.f;
+			OutLate = LateN > 0 ? static_cast<float>(LateL) / static_cast<float>(LateN) : -1.f;
+			OutSwings = Swings;
+			if (OutHitRate != nullptr)
+			{
+				const int32_t Hits = Enc.Stats.BossOutcomes[static_cast<int32_t>(EHitOutcome::Hit)];
+				*OutHitRate = Enc.Stats.BossSwings > 0 ? static_cast<float>(Hits) / static_cast<float>(Enc.Stats.BossSwings) : 0.f;
+			}
+		}
+
+		bool TestLearningPlayer(std::string& Log)
+		{
+			// A player who always dodges left meets a keeper that only throws the attack that punishes that habit hardest
+			// (found by measurement, so the test follows the frame data). A fixed habit keeps walking into it; a learning
+			// player stops — and carries the lesson into the session's next fight.
+			EMoveId Worst = EMoveId::None;
+			float WorstHit = -1.f;
+			for (int32_t A = 0; A < RL::NumBossMoves; ++A)
+			{
+				const EMoveId M = RL::ActionMove(A);
+				if (!Move(M).IsAttack() || Move(M).bUnblockable || M == EMoveId::BGrab) { continue; }
+				float E = 0.f, L = 0.f, Hit = 0.f;
+				int32_t N = 0;
+				LearningRun(0.f, nullptr, 77, E, L, N, M, &Hit);
+				if (N > 30 && Hit > WorstHit) { WorstHit = Hit; Worst = M; }
+			}
+			const int32_t Class = HabitClassOf(Move(Worst));
+			float FixedEarly = 0.f, FixedLate = 0.f, LearnEarly = 0.f, LearnLate = 0.f, LearnHit = 0.f;
+			int32_t FixedSwings = 0, LearnSwings = 0;
+			FBotMemory Mem;
+			LearningRun(0.f, nullptr, 77, FixedEarly, FixedLate, FixedSwings, Worst);
+			LearningRun(0.3f, &Mem, 77, LearnEarly, LearnLate, LearnSwings, Worst, &LearnHit);
+			const float QLeft = Class >= 0 ? Mem.Q[Class][2] : 0.f;
+			Logf(Log, "always-step-left vs a %s-only keeper (it hits that habit %.0f%% of the time), 120 s: fixed habit steps left %.2f (answers 1-8) -> %.2f (31+); learning player %.2f -> %.2f (hit %.0f%%), Q(StepL) %+.2f after %d updates",
+				Move(Worst).Name, 100.f * WorstHit, FixedEarly, FixedLate, LearnEarly, LearnLate, 100.f * LearnHit, QLeft, Mem.Updates);
+			float NextEarly = 0.f, NextLate = 0.f;
+			int32_t NextSwings = 0;
+			LearningRun(0.3f, &Mem, 78, NextEarly, NextLate, NextSwings, Worst);
+			Logf(Log, "next fight on the same memory: steps left %.2f in its first 8 answers (a fresh learner: %.2f)", NextEarly, LearnEarly);
+			return Worst != EMoveId::None && WorstHit > 0.5f && FixedSwings > 40 && LearnSwings > 40 && FixedEarly > 0.6f
+				&& LearnLate < FixedEarly - 0.3f && LearnHit < WorstHit - 0.05f && QLeft < -0.3f && Mem.Updates > 20 && NextEarly < LearnEarly;
+		}
+
+		bool TestNotebook(std::string& Log)
+		{
+			FRLPolicy Pol;
+			if (!LoadBrainFixture(Pol)) { Logf(Log, "fixture failed to load: %s", Pol.GetError().c_str()); return false; }
+			// 1. The notebook: every decision with a known answer is written down once, in the class of the move it threw.
+			FRLSession S;
+			FRLNotebook N;
+			FRLBrain B;
+			B.Bind(&Pol, &S, &N);
+			FRunConfig Cfg;
+			Cfg.Bot = HabitProfile();
+			Cfg.Seed = 99;
+			Cfg.bImmortal = true;
+			Cfg.MaxFrames = 60 * FramesPerSecond;
+			RunEncounter(B, Cfg);
+			B.FlushNotebook();
+			int32_t SumA = 0, SumP = 0;
+			for (int32_t C = 0; C < FRLNotebook::Classes; ++C)
+			{
+				for (int32_t K = 0; K < NumPlayerSymbols; ++K) { SumA += N.Answers[C][K]; SumP += N.Predicted[C][K]; }
+			}
+			const bool bBook = N.Predictions > 20 && SumA == N.Predictions && SumP == N.Predictions && N.Correct <= N.Predictions
+				&& N.ConfidentCorrect <= N.Confident && N.FightPredictions[0] == N.Predictions && N.Fights == 1;
+			Logf(Log, "60 s vs a habit player: %d predictions written down (%d right, %.0f%%), %d confident (%d right); rows sum to the count: %s",
+				N.Predictions, N.Correct, 100.f * N.Accuracy(), N.Confident, N.ConfidentCorrect, bBook ? "yes" : "NO");
+
+			// 2. Sampling (the easiest difficulties) is reproducible per fight seed and differs from the argmax sometimes.
+			auto Run = [&Pol](float Temperature, std::vector<FExchangeRow>& Rows)
+			{
+				FRLSession Mem;
+				FRLBrain Brain;
+				Brain.Bind(&Pol, &Mem);
+				Brain.Configure(0.3f, 1);
+				Brain.SetTemperature(Temperature);
+				FRunConfig C;
+				C.Bot = MakeBotProfile(EBotKind::Varied, 0.6f);
+				C.Seed = 321;
+				C.bImmortal = true;
+				C.MaxFrames = 40 * FramesPerSecond;
+				Rows.clear();
+				RunEncounter(Brain, C, &Rows);
+				return Brain.Observer().Params().Perception;
+			};
+			std::vector<FExchangeRow> A1, A2, G;
+			const int32_t Perception = Run(1.f, A1);
+			Run(1.f, A2);
+			Run(0.f, G);
+			int32_t Sampled = 0;
+			for (const FExchangeRow& R : A1) { Sampled += std::strstr(R.Decision.Reason, "sampled") != nullptr ? 1 : 0; }
+			const bool bSame = SameDecisions(A1, A2);
+			const bool bDiffers = !SameDecisions(A1, G);
+			const bool bSample = bSame && Sampled > 0 && bDiffers && Perception == RL::SkillParams(0.3f).Perception;
+			Logf(Log, "temperature 1 at skill 0.3 (perception %d): two runs identical %s, %d of %d decisions off the argmax, differs from greedy %s -> %s",
+				Perception, bSame ? "yes" : "NO", Sampled, static_cast<int32_t>(A1.size()), bDiffers ? "yes" : "NO", bSample ? "ok" : "WRONG");
+			return bBook && bSample;
+		}
+
 		const FCoreTest RLTests[] = {
 			{ "RL.ActionSpace",        "RL-0", &TestActionSpace },
 			{ "RL.ChainStartupFloor",  "RL-3", &TestChainStartupFloor },
@@ -1358,6 +1697,10 @@ namespace HW
 			{ "RL.PolicyFixture",      "RL-5", &TestPolicyFixture },
 			{ "RL.BrainDeterminism",   "RL-5", &TestBrainDeterminism },
 			{ "RL.SessionCarry",       "RL-2", &TestSessionCarry },
+			{ "RL.Skill",              "RL-7", &TestSkill },
+			{ "RL.LearningPlayer",     "RL-4", &TestLearningPlayer },
+			{ "RL.Notebook",           "RL-7", &TestNotebook },
+			{ "RL.Breather",           "RL-7", &TestBreather },
 		};
 	}
 

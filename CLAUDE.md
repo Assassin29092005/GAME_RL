@@ -15,13 +15,18 @@ masks, tokens, rewards, network format, trainer), `PLAN.md` (the combat spec; fr
 
 | | |
 |---|---|
-| `Tools\Build.bat` | build `HellwalkerRLEditor` Win64 Development. **Close the editor/game first** (Live Coding / a running game locks the DLL) |
+| `Tools\Build.bat` | build `HellwalkerRLEditor` Win64 Development. **Close the editor/game first** (Live Coding / a running game locks the DLL). Args pass to UBT: `-NoHotReloadFromIDE` builds while another project's editor on the same engine (e.g. the reference project) has Live Coding on |
 | `Tools\Test.bat` | every automation test, headless (`Project.HellwalkerRL`); prints `Test Completed` lines, exit 0 = all passed |
-| `Tools\Thesis.bat` | B0: builds `Sim\out\ThesisSim.exe` (plain MSVC, no Unreal), runs `--tests`, then the B0 sweep with the RL keeper (the shipped model) or, without one, the classic reference brain. Args pass through (`--brain classic`, `--sessions 4`, `--script 1`) |
+| `Tools\Thesis.bat` | B0: builds `Sim\out\ThesisSim.exe` (plain MSVC, no Unreal), runs `--tests`, then the B0 sweep with the RL keeper (the shipped model) or, without one, the classic reference brain. Args pass through (`--brain classic`, `--sessions 64`, `--identity 0|1|2`, `--skill`, `--script 1`). At 16 sessions the Warden's net-exchange cell vs RhythmParrier 0.7-0.9 is at the 5% line (noise); 64 settles it |
 | `Tools\RLBuild.bat` | builds `RL\native\out\hwrl.dll` (training env + C++ forward pass for Python, ctypes) and ThesisSim |
-| `Tools\RLTrain.bat --stage rl1\|rl2\|rl3 --run <name>` | train (RL\train.py; GPU PyTorch in `RL\.venv`) |
-| `Tools\RLEval.bat [--policy <hwrl>]` | RL.md §7 checks → `RL\reports\` |
+| `Tools\RLTrain.bat --stage rl1\|rl2\|rl3 --run <name>` | train (RL\train.py; GPU PyTorch in `RL\.venv`). `--league` adds the RL-4 exploiter rounds; `--resume <ckpt>` restores every setting |
+| `RL\.venv\Scripts\python.exe RL\exploit.py --boss <keeper.hwrl> --out <x.hwrl>` | train one exploiter (a player network) against a frozen keeper |
+| `RL\.venv\Scripts\python.exe RL\habits.py --hwrl <keeper.hwrl>` | the reading test (C++ attack log, seconds) |
+| `Tools\RLEval.bat [--hwrl <hwrl>]` | RL.md §7 checks + the keepers' styles + the difficulty ladder + the reading test → `RL\reports\` |
+| `Tools\CI.bat` | what GitHub Actions runs (`.github/workflows/ci.yml`): core tests, env benchmark, torch/C++/ONNX parity, trainer self-tests — no Unreal |
 | `Tools\RLShip.bat <hwrl>` | put a trained policy where the game loads it: `Content\HellwalkerRL\RL\hellwalker_rl.hwrl` |
+| `Tools\Parity.bat` | the Unreal-vs-simulator gap (RL\parity.py): autoplay sessions in the arena (`-HWParity=<jsonl>`, one launch = one session, `-benchmark` fixed steps) vs `hwrl_eval_sessions` on the same bots/keeper → `RL
+eports\parity.md`. Close the editor; builds lock while it runs |
 | `Tools\Play.bat` / `Tools\Arena.bat` | the open world / the duel alone (`-HWBoss=Sevarog\|Wukong\|Golem`, `-HWPolicy=<file.hwrl>`) |
 | `Tools\MakeMaps.bat` | regenerate `Content/HellwalkerRL/Maps/L_Hellwalker` + `L_Arena` via `-run=HWMakeMaps` |
 | `Tools\Package.bat` | the standalone game (.exe) into `Build\Packaged` |
@@ -48,18 +53,25 @@ the brains, and `HWSim` (2-D arena + simulated players incl. procedural habit pl
 Unreal headers. Changing rules/tuning in HWCore means re-running `Tools\Thesis.bat` and the tests.
 
 **Brains** (`HWBrain.h` `IBossBrain`): `FScriptBrain` = Pathbreaker, the script verbatim (the control arm / easy mode);
-`FRLBrain` = Hellwalker, the RL keeper: `FRLObserver` (what it may see — the player's state 6 frames late, never inputs;
-decision points; fairness masks; history tokens; READ banner) + `FRLPolicy` (the `.hwrl` weights and a plain C++
-forward pass: MLP + token embeddings + GRU + policy/value/read heads) + `FRLSession` (its memory of you: recurrent state +
-perceived exchanges, per game session, carried keeper to keeper, dropped on quit). The observer is shared verbatim by
+`FRLBrain` = Hellwalker, the RL keeper: `FRLObserver` (what it may see — the player's state 6 frames late at full skill,
+up to 16 at skill 0, never inputs; decision points; fairness masks; history tokens; READ banner) + `FRLPolicy` (the
+`.hwrl` weights and a plain C++ forward pass: MLP + token embeddings + GRU + policy/value/read heads) + `FRLSession` (its
+memory of you: recurrent state + perceived exchanges, per game session, carried keeper to keeper, dropped on quit) +
+`FRLNotebook` (what it learned about you, for the notebook screen; never an input). Observation layout 3: one network
+plays all three keepers (`Configure(Skill, Identity)`: 0 Warden, 1 Sage, 2 Returned) at every difficulty
+(`RL::SkillParams`; easy presets also sample with `SetTemperature`). `IsBossPlayable()` gates every use of a model. The observer is shared verbatim by
 the training environment, so the keeper acts identically in training and in the game. `Sim/Classic/` keeps the
 reference project's tally brain (`FClassicBrain`, playstyle model, payoff table) **for the tools only** — the benchmark.
 
-**Training** (`RL/`): `RL/native` = `FRLEnvBatch` (thousands of fights on a thread pool, paused at every decision) +
-the `hwrl.dll` C ABI; Python = `hwcore.py` (ctypes), `env.py`, `players.py` (population + curriculum), `model.py`
-(the same network in PyTorch), `ppo_rnn.py` (recurrent PPO, masks, Lagrangian aggression constraint, aux read head),
-`train.py`, `export.py` (`.hwrl` + ONNX), `eval.py` (RL.md §7). Layout changes in `HWRLTypes.h` bump
-`ObsLayoutVersion` and require retraining.
+**Training** (`RL/`): `RL/native` = `FRLEnvBatch` (thousands of fights on a thread pool, paused at every decision; each
+session also fixes the keeper's skill / identity) + `FRLPlayerEnvBatch` (RL-4: the exploiter's env, the keeper frozen) +
+`HWRLPlayer` (the exploiter's senses) + the `hwrl.dll` C ABI (v2); Python = `hwcore.py` (ctypes), `env.py`, `players.py`
+(population + curriculum: reference bots, habit players — 35% of them LEARN against the keeper — and registered
+exploiters), `model.py` (the same network in PyTorch), `ppo_rnn.py` (recurrent PPO, masks, Lagrangian aggression
+constraint, aux read head), `train.py` (stages, the reading test every 50 iterations, the league), `exploit.py`,
+`export.py` (`.hwrl` + ONNX), `eval.py` (RL.md §7, keepers, ladder), `habits.py` (the reading test). Layout changes in
+`HWRLTypes.h` bump `ObsLayoutVersion` and require retraining. A training run holds `RL\native\out\hwrl.dll`: give it a
+copy via `HWRL_DLL`, or build elsewhere with `HWRL_OUT` (Tools\CI.bat does).
 
 **The Unreal layer is presentation + input around that core.** `UHWDuelSubsystem` owns the encounter and the two brains
 (the tier picks one; Hellwalker without a model falls back to the script) and steps it on a fixed frame cursor; it

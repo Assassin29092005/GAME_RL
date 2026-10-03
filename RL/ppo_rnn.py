@@ -181,12 +181,13 @@ def set_matmul_precision(tf32: bool) -> None:
 # =====================================================================================================================
 
 class RolloutStorage:
-	def __init__(self, T: int, N: int, bptt: int, hidden: int, device: torch.device, pin: bool):
+	def __init__(self, T: int, N: int, bptt: int, hidden: int, device: torch.device, pin: bool, obs_dim: int = OBS_DIM,
+			history_tokens: int = HISTORY_TOKENS, token_fields: int = TOKEN_FIELDS, num_actions: int = NUM_ACTIONS):
 		self.T, self.N, self.L = T, N, bptt
 		dev = device
-		self.obs = torch.zeros(T, N, OBS_DIM, device=dev)
-		self.tokens = torch.zeros(T, N, HISTORY_TOKENS, TOKEN_FIELDS, dtype=torch.int8, device=dev)
-		self.masks = torch.zeros(T, N, NUM_ACTIONS, dtype=torch.bool, device=dev)
+		self.obs = torch.zeros(T, N, obs_dim, device=dev)
+		self.tokens = torch.zeros(T, N, history_tokens, token_fields, dtype=torch.int8, device=dev)
+		self.masks = torch.zeros(T, N, num_actions, dtype=torch.bool, device=dev)
 		self.starts = torch.zeros(T, N, dtype=torch.bool, device=dev)
 		self.actions = torch.zeros(T, N, dtype=torch.long, device=dev)
 		self.logp = torch.zeros(T, N, device=dev)
@@ -236,10 +237,17 @@ class PPOTrainer:
 		self.lam = float(cfg.lambda_init)
 		self.normalizer = ReturnNormalizer(self.N, cfg.gamma, cfg.reward_clip)
 		self.hidden_size = int(self.model.initial_state(1, self.device).shape[-1])
-		self.storage = RolloutStorage(cfg.num_steps, self.N, cfg.bptt, self.hidden_size, self.device, self.cuda)
+		st = env.staging
+		# Sized by the env's staging layout: the keeper's (107 / 32x6 / 23) or an exploiter's (99 / none / 14).
+		self.storage = RolloutStorage(cfg.num_steps, self.N, cfg.bptt, self.hidden_size, self.device, self.cuda,
+			st.obs_dim, st.K, st.F, st.A)
+		self.aux_classes = int(getattr(self.model, "aux_classes", AUX_CLASSES))
 		self.gen = torch.Generator(device=self.device)
 		self.gen.manual_seed(int(seed))
-		st = env.staging
+		# A run extended past its planned length continues its lr / entropy decay from where it was (review finding:
+		# recomputing frac from a new total made the lr jump back up the ramp): (iteration, lr, ent) at the extension.
+		self.anchor = None
+		self.skipped_updates = 0
 		if st.tensor is None:
 			raise RuntimeError("the env's staging buffer needs torch")
 		# The device side of the one-copy-per-step transfer (on CPU the host buffer itself is used).
@@ -250,13 +258,28 @@ class PPOTrainer:
 		self.started = False
 
 	# -- schedules
+	def _schedule_values(self, iteration: int, total: int):
+		if self.anchor is not None and iteration >= self.anchor[0] and total > self.anchor[0]:
+			a_it, a_lr, a_ent = self.anchor
+			frac = (iteration - a_it) / (total - a_it)
+			return linear_schedule(a_lr, self.cfg.lr_final, frac), linear_schedule(a_ent, self.cfg.ent_coef_final, frac)
+		frac = iteration / max(total, 1)
+		return linear_schedule(self.cfg.lr, self.cfg.lr_final, frac), linear_schedule(self.cfg.ent_coef, self.cfg.ent_coef_final, frac)
+
 	def schedule(self) -> Dict[str, float]:
-		frac = self.iteration / self.total_iterations
-		lr = linear_schedule(self.cfg.lr, self.cfg.lr_final, frac)
-		ent = linear_schedule(self.cfg.ent_coef, self.cfg.ent_coef_final, frac)
+		lr, ent = self._schedule_values(self.iteration, self.total_iterations)
 		for g in self.opt.param_groups:
 			g["lr"] = lr
 		return {"lr": lr, "ent_coef": ent}
+
+	def set_total_iterations(self, new_total: int) -> None:
+		"""Change the run's planned length (a resumed run extended or shortened): the schedules continue from the
+		values they have NOW and reach their finals at the new total."""
+		new_total = max(1, int(new_total))
+		if new_total != self.total_iterations and self.iteration > 0:
+			lr, ent = self._schedule_values(self.iteration, self.total_iterations)
+			self.anchor = (self.iteration, lr, ent)
+		self.total_iterations = new_total
 
 	def start(self) -> None:
 		self.env.reset()
@@ -322,6 +345,10 @@ class PPOTrainer:
 
 		# Returns: fold the cost with the current multiplier, normalise, GAE; then update the multiplier.
 		raw_r, raw_c, done = s.np_reward, s.np_cost, s.np_done
+		if not (np.isfinite(raw_r).all() and np.isfinite(raw_c).all()):
+			# One NaN would poison the running return variance for good (and the checkpoint that saves it).
+			raise FloatingPointError(f"non-finite reward / cost from the env ({int((~np.isfinite(raw_r)).sum())} rewards, "
+				f"{int((~np.isfinite(raw_c)).sum())} costs)")
 		lam_used = self.lam if cfg.use_cost else 0.0
 		folded = raw_r.astype(np.float64) - lam_used * raw_c.astype(np.float64)
 		rew = self.normalizer(folded, done) if cfg.norm_reward else folded.astype(np.float32)
@@ -403,7 +430,7 @@ class PPOTrainer:
 				lab = q["aux"][:, idx]
 				aux_logits = model.aux_logits(feats, a)
 				n_lab = (lab >= 0).sum().clamp_min(1)
-				aux_loss = F.cross_entropy(aux_logits.reshape(-1, AUX_CLASSES), lab.reshape(-1), ignore_index=-1,
+				aux_loss = F.cross_entropy(aux_logits.reshape(-1, self.aux_classes), lab.reshape(-1), ignore_index=-1,
 					reduction="sum") / n_lab
 				aux_acc = ((aux_logits.argmax(-1) == lab) & (lab >= 0)).sum() / n_lab
 				loss = pg_loss + cfg.vf_coef * v_loss - ent_coef * entropy + cfg.aux_coef * aux_loss
@@ -411,7 +438,12 @@ class PPOTrainer:
 				self.opt.zero_grad(set_to_none=True)
 				loss.backward()
 				grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), cfg.max_grad_norm)
-				self.opt.step()
+				# A non-finite loss / gradient would turn every weight (and Adam's state) into NaN: skip that step. (One
+				# host sync per minibatch; cheap next to the forward / backward.)
+				if bool(torch.isfinite(loss)) and bool(torch.isfinite(grad_norm)):
+					self.opt.step()
+				else:
+					self.skipped_updates += 1
 
 				with torch.no_grad():
 					approx_kl = ((ratio - 1.0) - logratio).mean()
@@ -427,6 +459,7 @@ class PPOTrainer:
 		out = {k: float(torch.stack(v).mean()) for k, v in acc.items()}
 		out["ratio_dev_first_mb"] = float(ratio_dev_first)
 		out["epochs_run"] = epochs_run
+		out["skipped_updates"] = self.skipped_updates
 		with torch.no_grad():
 			v, r = self.storage.values.flatten(), self.storage.returns.flatten()
 			var_r = torch.var(r)
@@ -477,7 +510,8 @@ class PPOTrainer:
 	def state_dict(self) -> dict:
 		return {"optimizer": self.opt.state_dict(), "lambda": self.lam, "normalizer": self.normalizer.state_dict(),
 			"iteration": self.iteration, "decisions": self.decisions, "total_iterations": self.total_iterations,
-			"generator": self.gen.get_state(), "ppo_config": asdict(self.cfg)}
+			"generator": self.gen.get_state(), "ppo_config": asdict(self.cfg),
+			"anchor": list(self.anchor) if self.anchor is not None else None}
 
 	def load_state_dict(self, s: dict, load_optimizer: bool = True) -> None:
 		if load_optimizer and "optimizer" in s:
@@ -487,6 +521,9 @@ class PPOTrainer:
 			self.normalizer.load_state_dict(s["normalizer"])
 		self.iteration = int(s.get("iteration", 0))
 		self.decisions = int(s.get("decisions", 0))
+		self.total_iterations = int(s.get("total_iterations", self.total_iterations))
+		a = s.get("anchor")
+		self.anchor = (int(a[0]), float(a[1]), float(a[2])) if a else None
 		if "generator" in s:
 			try:
 				self.gen.set_state(s["generator"])

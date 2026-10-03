@@ -53,6 +53,9 @@ RL/.pip-tmp/
 RL/runs/
 RL/checkpoints/
 RL/native/out/
+# HWRL_OUT builds beside it: a training run's own DLL copy, dev builds
+RL/native/out_train/
+RL/native/out_dev/
 __pycache__/
 *.pyc
 

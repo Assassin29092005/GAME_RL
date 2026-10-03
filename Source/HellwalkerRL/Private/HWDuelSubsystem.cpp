@@ -1,10 +1,15 @@
 #include "HWDuelSubsystem.h"
+#include "HWAudio.h"
+#include "Misc/Parse.h"
+#include "Misc/CommandLine.h"
+#include "HWAnimTypes.h"
 
 #include "HellwalkerRL.h"
 #include "HWCharacterBase.h"
 #include "HWCombatComponent.h"
 #include "HWPlayerCharacter.h"
 #include "HWSessionSubsystem.h"
+#include "HWWorldGen.h"
 #include "HWSlashFX.h"
 #include "CollisionQueryParams.h"
 #include "DrawDebugHelpers.h"
@@ -120,6 +125,15 @@ bool UHWDuelSubsystem::DoesSupportWorldType(const EWorldType::Type WorldType) co
 void UHWDuelSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 {
 	Super::Initialize(Collection);
+	if (FParse::Value(FCommandLine::Get(), TEXT("-HWParity="), ParityPath))
+	{
+		ParityPath = FPaths::ConvertRelativePathToFull(FPaths::LaunchDir(), ParityPath); // not the engine's binaries folder
+		UE_LOG(LogHellwalkerRL, Log, TEXT("Parity: one record per encounter -> %s"), *ParityPath);
+	}
+	FParse::Value(FCommandLine::Get(), TEXT("-HWSeedBase="), SeedBase);
+	FParse::Value(FCommandLine::Get(), TEXT("-HWMoveAccel="), MoveAccelOverride);
+	FParse::Value(FCommandLine::Get(), TEXT("-HWMoveBraking="), MoveBrakingOverride);
+	bNoHitstop = FParse::Param(FCommandLine::Get(), TEXT("HWNoHitstop"));
 	Oracle = MakeUnique<FHWContactOracle>(this);
 	Encounter = MakeUnique<HW::FEncounter>();
 	Encounter->bRecordRows = true;
@@ -138,6 +152,22 @@ TStatId UHWDuelSubsystem::GetStatId() const
 	RETURN_QUICK_DECLARE_CYCLE_STAT(UHWDuelSubsystem, STATGROUP_Tickables);
 }
 
+void UHWDuelSubsystem::RefreshKeeperIdentity()
+{
+	// Which keeper this is (the RL network's identity input; also whose voice the sound uses and, in the arena, its name).
+	int32 CommandLineKeeper = -1;
+	FParse::Value(FCommandLine::Get(), TEXT("-HWKeeper="), CommandLineKeeper);
+	const AHWCharacterBase* BossActor = BossFighter.Get();
+	const FName Cast = BossActor != nullptr && !BossActor->CastOverride.IsNone() ? BossActor->CastOverride : HWCastForSide(HW::ESide::Boss);
+	KeeperIdentity = KeeperIdentityFor(Cast, BossScript, KeeperOverride, CommandLineKeeper);
+	if (!bBossConfigured)
+	{
+		// The arena: the keeper's own name (the open world sets the shrine's title with ConfigureBoss).
+		const TArray<FHWShrineSpec>& Shrines = FHWWorldGen::Shrines();
+		if (Shrines.IsValidIndex(KeeperIdentity)) { BossTitle = Shrines[KeeperIdentity].Title; }
+	}
+}
+
 void UHWDuelSubsystem::RegisterFighters(AHWCharacterBase* InPlayer, AHWCharacterBase* InBoss)
 {
 	PlayerFighter = InPlayer;
@@ -145,6 +175,7 @@ void UHWDuelSubsystem::RegisterFighters(AHWCharacterBase* InPlayer, AHWCharacter
 	if (InPlayer != nullptr) { InPlayer->GetCombat()->SetSide(HW::ESide::Player); }
 	if (InBoss != nullptr) { InBoss->GetCombat()->SetSide(HW::ESide::Boss); }
 	PlaceFighters();
+	RefreshKeeperIdentity(); // the start screen names the keeper before the first fight
 }
 
 AHWCharacterBase* UHWDuelSubsystem::GetFighterActor(HW::ESide Side) const
@@ -194,19 +225,28 @@ void UHWDuelSubsystem::ResetEncounter(int32 InSeed)
 	if (S == nullptr || !Encounter.IsValid()) { return; }
 
 	CloseTelemetry();
-	Seed = InSeed >= 0 ? InSeed : S->EncountersStarted * 7919 + 17;
+	Seed = InSeed >= 0 ? InSeed : SeedBase + S->EncountersStarted * 7919 + 17;
 	++S->EncountersStarted;
 
 	// The tier picks the brain. Hellwalker is the RL keeper when its weights are present; without them it plays the
 	// script (the optional-asset pattern) and says so. The memory (what the keepers keep about you) is the session's.
 	ScriptBrain.SetScriptIndex(BossScript);
 	HW::IBossBrain* Brain = &ScriptBrain;
+	RefreshKeeperIdentity();
 	if (S->Tier == EHWTier::Hellwalker)
 	{
 		if (const HW::FRLPolicy* Policy = S->GetPolicy())
 		{
-			RLBrain.Bind(Policy, &S->GetMemory());
+			// At what difficulty: the same network plays all three keepers at every skill (observation layout 3).
+			S->GetKeeperConfig(KeeperSkill, KeeperTemperature, bKeeperAdaptive, KeeperSwingGap);
+			RLBrain.Configure(KeeperSkill, KeeperIdentity, KeeperSwingGap);
+			RLBrain.SetTemperature(KeeperTemperature);
+			RLBrain.Bind(Policy, &S->GetMemory(), &S->GetNotebookMutable());
 			Brain = &RLBrain;
+			UE_LOG(LogHellwalkerRL, Log, TEXT("The RL keeper plays the %s at skill %.2f%s%s%s."), UTF8_TO_TCHAR(HW::RL::KeeperName(KeeperIdentity)),
+				KeeperSkill, KeeperTemperature > 0.f ? *FString::Printf(TEXT(", sampling at %.1f"), KeeperTemperature) : TEXT(""),
+				KeeperSwingGap > 0 ? *FString::Printf(TEXT(", at least %.1f s from one attack to its next opener"), KeeperSwingGap / static_cast<float>(HW::FramesPerSecond)) : TEXT(""),
+				bKeeperAdaptive ? TEXT(" (adaptive)") : TEXT(""));
 		}
 		else
 		{
@@ -215,9 +255,11 @@ void UHWDuelSubsystem::ResetEncounter(int32 InSeed)
 	}
 	Encounter->Begin(Brain, Seed, false);
 	{
-		// Which boss (open world shrines): its own health (and, for Pathbreaker, its own script).
+		// Which boss (open world shrines): its own health (and, for Pathbreaker, its own script). In the arena an RL keeper
+		// chosen by look or -HWKeeper gets its own health (RL::KeeperHealthScale), as in training and the open world.
 		HW::FFighter& B = Encounter->Duel.Get(HW::ESide::Boss);
-		B.HealthMax *= BossHealthScale;
+		const float Scale = bBossConfigured ? BossHealthScale : (Brain == &RLBrain ? HW::RL::KeeperHealthScale(KeeperIdentity) : 1.f);
+		B.HealthMax *= Scale;
 		B.Health = B.HealthMax;
 	}
 
@@ -233,7 +275,18 @@ void UHWDuelSubsystem::ResetEncounter(int32 InSeed)
 	if (Bot.IsValid()) { Bot->Reset(HW::MakeBotProfile(AutoplayKind, AutoplaySkill), Seed * 7919 + 17); }
 
 	PlaceFighters();
+	bParityTimeout = false;
+	ParityDistanceSum = 0.0;
+	ParityDistanceSamples = 0;
+	for (int32& M : ParityBossMoves) { M = 0; }
+	ParityRealSeconds = FPlatformTime::Seconds();
+	ParityStartDistance = 0.f;
+	if (const AHWCharacterBase* P = PlayerFighter.Get())
+	{
+		if (const AHWCharacterBase* B = BossFighter.Get()) { ParityStartDistance = static_cast<float>(FVector::Dist2D(P->GetActorLocation(), B->GetActorLocation())); }
+	}
 	State = EHWEncounterState::Running;
+	if (UHWAudioSubsystem* Audio = GetWorld()->GetSubsystem<UHWAudioSubsystem>()) { Audio->OnDuelStart(KeeperIdentity); }
 	OpenTelemetry();
 	UE_LOG(LogHellwalkerRL, Log, TEXT("Encounter %d begins: %s (%s), seed %d; the keepers have met you in %d fight(s) and remember %d exchange(s)."),
 		S->EncountersStarted, *S->TierLabel(S->Tier), UTF8_TO_TCHAR(Brain->Name()), Seed, S->GetMemory().FightsBegun, S->GetMemory().NumTokens);
@@ -241,9 +294,11 @@ void UHWDuelSubsystem::ResetEncounter(int32 InSeed)
 
 void UHWDuelSubsystem::PlaceFighters()
 {
-	auto Place = [](AHWCharacterBase* C, const FVector& Where, float Yaw)
+	auto Place = [this](AHWCharacterBase* C, const FVector& Where, float Yaw)
 	{
 		if (C == nullptr) { return; }
+		if (MoveAccelOverride > 0.f) { C->GetCharacterMovement()->MaxAcceleration = MoveAccelOverride; }
+		if (MoveBrakingOverride > 0.f) { C->GetCharacterMovement()->BrakingDecelerationWalking = MoveBrakingOverride; }
 		C->GetCombat()->StopDisplacement();
 		C->SetActorLocationAndRotation(Where, FRotator(0.f, Yaw, 0.f), false, nullptr, ETeleportType::TeleportPhysics);
 		C->GetCharacterMovement()->StopMovementImmediately();
@@ -252,13 +307,50 @@ void UHWDuelSubsystem::PlaceFighters()
 			PC->SetControlRotation(FRotator(-12.f, Yaw, 0.f));
 		}
 	};
-	Place(PlayerFighter.Get(), PlayerSpawn, ArenaYaw);
-	Place(BossFighter.Get(), BossSpawn, ArenaYaw + 180.f);
+	FVector PSpawn = PlayerSpawn;
+	FVector BSpawn = BossSpawn;
+	if (!ParityPath.IsEmpty())
+	{
+		// Parity: the simulator's start distance, uniform in [450, 800] (RunEvalSession), about the arena's centre.
+		FRandomStream R(Seed * 31 + 5);
+		const float D = R.FRandRange(450.f, 800.f);
+		const FVector Mid = (PlayerSpawn + BossSpawn) * 0.5f;
+		FVector Axis = BossSpawn - PlayerSpawn;
+		Axis.Z = 0.f;
+		Axis = Axis.GetSafeNormal();
+		PSpawn = FVector(Mid.X - Axis.X * D * 0.5f, Mid.Y - Axis.Y * D * 0.5f, PlayerSpawn.Z);
+		BSpawn = FVector(Mid.X + Axis.X * D * 0.5f, Mid.Y + Axis.Y * D * 0.5f, BossSpawn.Z);
+	}
+	Place(PlayerFighter.Get(), PSpawn, ArenaYaw);
+	Place(BossFighter.Get(), BSpawn, ArenaYaw + 180.f);
+}
+
+int32 UHWDuelSubsystem::KeeperIdentityFor(FName Cast, int32 Script, int32 Explicit, int32 CommandLine)
+{
+	auto Valid = [](int32 K) { return K >= 0 && K < HW::RL::NumKeepers; };
+	if (Valid(CommandLine)) { return CommandLine; }
+	if (Valid(Explicit)) { return Explicit; }
+	if (Cast == FName(TEXT("Golem"))) { return static_cast<int32>(HW::RL::EKeeper::Returned); }
+	if (Cast == FName(TEXT("Wukong"))) { return static_cast<int32>(HW::RL::EKeeper::Sage); }
+	if (Cast == FName(TEXT("Sevarog"))) { return static_cast<int32>(HW::RL::EKeeper::Warden); }
+	return Script == 1 ? static_cast<int32>(HW::RL::EKeeper::Sage) : static_cast<int32>(HW::RL::EKeeper::Warden);
 }
 
 void UHWDuelSubsystem::EndEncounter(bool bPlayerWon)
 {
+	if (State != EHWEncounterState::Running) { return; } // once per fight (a double KO raises two Death events)
 	State = bPlayerWon ? EHWEncounterState::PlayerWon : EHWEncounterState::PlayerLost;
+	if (Encounter.IsValid() && Encounter->Brain() == &RLBrain)
+	{
+		// The notebook gets the fight's last answer; Adaptive moves the skill for the next fight.
+		RLBrain.FlushNotebook();
+		if (UHWSessionSubsystem* S = GetSession())
+		{
+			const HW::FFighter& P = Encounter->Duel.Get(HW::ESide::Player);
+			const HW::FFighter& B = Encounter->Duel.Get(HW::ESide::Boss);
+			S->RecordFightForAdaptive(bPlayerWon, P.HealthMax > 0.f ? P.Health / P.HealthMax : 0.f, B.HealthMax > 0.f ? B.Health / B.HealthMax : 0.f);
+		}
+	}
 	FlushTelemetryRows();
 	CloseTelemetry();
 	for (int32 I = 0; I < 2; ++I)
@@ -267,9 +359,54 @@ void UHWDuelSubsystem::EndEncounter(bool bPlayerWon)
 	}
 	const HW::FEncounterStats& St = Encounter->Stats;
 	UE_LOG(LogHellwalkerRL, Log, TEXT("Encounter over — %s. %.1f s, player took %.0f, boss took %.0f, boss swings/min %.1f, counters landed %d."),
-		bPlayerWon ? TEXT("the Warden falls") : TEXT("you died"), St.Frames / 60.f, St.PlayerDamageTaken, St.BossDamageTaken,
-		St.SwingsPerMin(), St.CountersLanded);
+		bParityTimeout ? TEXT("time (nobody fell)") : (bPlayerWon ? *FString::Printf(TEXT("the %s falls"), UTF8_TO_TCHAR(HW::RL::KeeperName(KeeperIdentity))) : TEXT("you died")),
+		St.Frames / 60.f, St.PlayerDamageTaken, St.BossDamageTaken, St.SwingsPerMin(), St.CountersLanded);
+	if (!ParityPath.IsEmpty()) { WriteParityRecord(bPlayerWon); }
+	if (UHWAudioSubsystem* Audio = GetWorld()->GetSubsystem<UHWAudioSubsystem>()) { Audio->OnDuelEnd(bPlayerWon); }
 	OnEncounterEnded.Broadcast(bPlayerWon);
+}
+
+void UHWDuelSubsystem::WriteParityRecord(bool bPlayerWon)
+{
+	const HW::FEncounterStats& St = Encounter->Stats;
+	const UHWSessionSubsystem* S = GetSession();
+	const bool bRL = Encounter->Brain() == &RLBrain;
+	FString Moves;
+	for (int32 A = 0; A < HW::RL::NumBossMoves; ++A) { Moves += FString::Printf(TEXT("%s%d"), A > 0 ? TEXT(",") : TEXT(""), ParityBossMoves[A]); }
+	auto O = [&St](HW::EHitOutcome X) { return St.BossOutcomes[static_cast<int32>(X)]; };
+	const HW::FFighter& B = Encounter->Duel.Get(HW::ESide::Boss);
+	const FString Line = FString::Printf(
+		TEXT("{\"seed_base\":%d,\"encounter\":%d,\"seed\":%d,\"arm\":\"%s\",\"identity\":%d,\"skill\":%.3f,\"temperature\":%.3f,\"swing_gap\":%d,")
+		TEXT("\"bot\":\"%s\",\"bot_skill\":%.3f,\"autoplay\":%s,\"frames\":%d,\"player_died\":%s,\"boss_died\":%s,\"timeout\":%s,")
+		TEXT("\"player_dmg_taken\":%.2f,\"boss_dmg_taken\":%.2f,\"boss_health_max\":%.1f,\"boss_swings\":%d,\"player_swings\":%d,")
+		TEXT("\"boss_hits\":%d,\"boss_whiffs\":%d,\"boss_blocked\":%d,\"boss_parried\":%d,\"decisions\":%d,\"read_counters\":%d,")
+		TEXT("\"distance_sum\":%.1f,\"distance_samples\":%d,\"start_distance\":%.1f,\"boss_moves\":[%s],\"real_seconds\":%.2f,")
+		TEXT("\"move_accel\":%.0f,\"move_braking\":%.0f,\"hitstop\":%s}"),
+		SeedBase, S != nullptr ? S->EncountersStarted : 0, Seed, bRL ? TEXT("rl") : TEXT("script"), KeeperIdentity, bRL ? KeeperSkill : 1.f,
+		bRL ? KeeperTemperature : 0.f, bRL ? KeeperSwingGap : 0, UTF8_TO_TCHAR(HW::BotKindName(AutoplayKind)), AutoplaySkill,
+		bAutoplay ? TEXT("true") : TEXT("false"), St.Frames, St.bPlayerDied ? TEXT("true") : TEXT("false"),
+		St.bBossDied ? TEXT("true") : TEXT("false"), bParityTimeout ? TEXT("true") : TEXT("false"), St.PlayerDamageTaken, St.BossDamageTaken,
+		B.HealthMax, St.BossSwings, St.PlayerSwings, O(HW::EHitOutcome::Hit), O(HW::EHitOutcome::Whiff), O(HW::EHitOutcome::Blocked),
+		O(HW::EHitOutcome::Parried), St.Decisions, St.CountersLanded, ParityDistanceSum, ParityDistanceSamples, ParityStartDistance, *Moves,
+		FPlatformTime::Seconds() - ParityRealSeconds,
+		PlayerFighter.IsValid() ? PlayerFighter->GetCharacterMovement()->MaxAcceleration : 0.f,
+		PlayerFighter.IsValid() ? PlayerFighter->GetCharacterMovement()->BrakingDecelerationWalking : 0.f,
+		bNoHitstop ? TEXT("false") : TEXT("true"));
+	// The simulated player's own view this fight (HW::FBotDiag; the simulator reports the same through hwrl_eval_sessions_gap).
+	FString BotDiag;
+	if (Bot.IsValid())
+	{
+		const HW::FBotDiag& D = Bot->Diag();
+		BotDiag = FString::Printf(
+			TEXT(",\"bot_diag\":{\"frames\":%d,\"actionable\":%d,\"in_range\":%d,\"in_range_actionable\":%d,\"boss_open\":%d,")
+			TEXT("\"boss_open_in_range\":%d,\"boss_swinging\":%d,\"defence_pending\":%d,\"punish_starts\":%d,\"aggro_starts\":%d,")
+			TEXT("\"response_attacks\":%d,\"attack_commits\":%d,\"walk_fwd\":%d,\"walk_back\":%d,\"guarding\":%d,\"distance_sum\":%.1f}"),
+			D.Frames, D.Actionable, D.InRange, D.InRangeActionable, D.BossOpen, D.BossOpenInRange, D.BossSwinging, D.DefencePending,
+			D.PunishStarts, D.AggroStarts, D.ResponseAttacks, D.AttackCommits, D.WalkFwd, D.WalkBack, D.Guarding, D.DistanceSum);
+	}
+	const FString Full = BotDiag.IsEmpty() ? Line : Line.LeftChop(1) + BotDiag + TEXT("}");
+	FFileHelper::SaveStringToFile(Full + LINE_TERMINATOR, *ParityPath, FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM, &IFileManager::Get(), FILEWRITE_Append);
+	UE_LOG(LogHellwalkerRL, Log, TEXT("Parity record %d written (%s)."), S != nullptr ? S->EncountersStarted : 0, *ParityPath);
 }
 
 void UHWDuelSubsystem::DebugKill(HW::ESide Side)
@@ -393,7 +530,7 @@ void UHWDuelSubsystem::Tick(float DeltaTime)
 
 	// A2: real frame time (the fixed frame rate makes DeltaTime a constant; real time is what matters).
 	const double Now = FPlatformTime::Seconds();
-	if (LastRealTime > 0.0 && State == EHWEncounterState::Running)
+	if (LastRealTime > 0.0 && State == EHWEncounterState::Running && Now - LastRealTime < 0.25)   // a pause / hitch is not a frame
 	{
 		FrameTimeAccumMs += (Now - LastRealTime) * 1000.0;
 		++FrameTimeSamples;
@@ -404,6 +541,8 @@ void UHWDuelSubsystem::Tick(float DeltaTime)
 	{
 		for (FFlash& Fl : Flashes) { Fl.FramesLeft = FMath::Max(0, Fl.FramesLeft - 1); }
 		Flashes.RemoveAll([](const FFlash& Fl) { return Fl.FramesLeft <= 0; });
+		// A read that landed with the killing blow still fades over its ~0.4 s on the end screen (it froze before).
+		if (ReadMeterFramesLeft > 0) { --ReadMeterFramesLeft; }
 		return;
 	}
 
@@ -413,6 +552,7 @@ void UHWDuelSubsystem::Tick(float DeltaTime)
 	while (FrameCursor >= 1.0 && Guard++ < 8)
 	{
 		FrameCursor -= 1.0;
+		if (HitstopFrames > 0 && bNoHitstop) { HitstopFrames = 0; }
 		if (HitstopFrames > 0)
 		{
 			--HitstopFrames; // hit-stop: the duel holds still; no frame elapses for either fighter
@@ -460,6 +600,12 @@ void UHWDuelSubsystem::StepOneFrame()
 	// 5. Fan out.
 	HandleEvents();
 	FlushTelemetryRows();
+	if (!ParityPath.IsEmpty() && State == EHWEncounterState::Running && E.Duel.Frame >= ParityMaxFrames)
+	{
+		bParityTimeout = true; // the simulator's cap: neither died
+		EndEncounter(false);
+		return;
+	}
 
 	for (FFlash& Fl : Flashes) { --Fl.FramesLeft; }
 	Flashes.RemoveAll([](const FFlash& Fl) { return Fl.FramesLeft <= 0; });
@@ -502,13 +648,46 @@ void UHWDuelSubsystem::LatchCommits()
 	}
 }
 
+void UHWDuelSubsystem::Rumble(float Intensity, float Seconds) const
+{
+	// Gamepad force feedback for the player (a hit taken, a parry, a READ). Harmless without a pad.
+	const AHWCharacterBase* P = PlayerFighter.Get();
+	APlayerController* PC = P != nullptr ? Cast<APlayerController>(P->GetController()) : nullptr;
+	if (PC != nullptr && !bAutoplay) { PC->PlayDynamicForceFeedback(Intensity, Seconds, true, true, true, true); }
+}
+
 void UHWDuelSubsystem::HandleEvents()
 {
 	HW::FEncounter& E = *Encounter;
+	UHWAudioSubsystem* Audio = GetWorld()->GetSubsystem<UHWAudioSubsystem>();
+	// A trade can kill both on one frame: the keeper's death decides it, as in the training env (FRLEnv) — the player won.
+	bool bBossDiedThisFrame = false;
+	for (const HW::FDuelEvent& Ev : E.FrameEvents())
+	{
+		bBossDiedThisFrame = bBossDiedThisFrame || (Ev.Type == HW::EDuelEvent::Death && Ev.Side == HW::ESide::Boss);
+	}
 	for (const HW::FDuelEvent& Ev : E.FrameEvents())
 	{
 		AHWCharacterBase* Actor = GetFighterActor(Ev.Side);
 		AHWCharacterBase* Other = GetFighterActor(HW::Opponent(Ev.Side));
+		if (Audio != nullptr)
+		{
+			// Swings sound where they start, outcomes where they land.
+			const AHWCharacterBase* At = Ev.Type == HW::EDuelEvent::Outcome ? Other : Actor;
+			Audio->OnDuelEvent(Ev, At != nullptr ? At->GetActorLocation() : FVector::ZeroVector, KeeperIdentity);
+		}
+		if (Ev.Type == HW::EDuelEvent::Outcome && Ev.Side == HW::ESide::Boss && Ev.Outcome == HW::EHitOutcome::Hit) { Rumble(0.55f + FMath::Min(Ev.Damage / 100.f, 0.45f), 0.18f); }
+		if (Ev.Type == HW::EDuelEvent::Outcome && Ev.Side == HW::ESide::Boss && Ev.Outcome == HW::EHitOutcome::Parried) { Rumble(0.8f, 0.12f); }
+		if (Ev.Type == HW::EDuelEvent::Commit && Ev.Side == HW::ESide::Boss)
+		{
+			const int32 A = HW::RL::MoveAction(Ev.Move);
+			if (A >= 0) { ++ParityBossMoves[A]; }
+			if (Actor != nullptr && Other != nullptr)
+			{
+				ParityDistanceSum += FVector::Dist2D(Actor->GetActorLocation(), Other->GetActorLocation());
+				++ParityDistanceSamples;
+			}
+		}
 		switch (Ev.Type)
 		{
 		case HW::EDuelEvent::Commit:
@@ -563,7 +742,7 @@ void UHWDuelSubsystem::HandleEvents()
 			}
 			break;
 		case HW::EDuelEvent::Death:
-			EndEncounter(Ev.Side == HW::ESide::Boss);
+			EndEncounter(bBossDiedThisFrame);
 			break;
 		default:
 			break;
@@ -576,6 +755,12 @@ void UHWDuelSubsystem::HandleEvents()
 		// Testimony, not telegraph: shown only AFTER a model-driven counter has landed (PLAN §2.4).
 		ReadMeter = RM;
 		ReadMeterFramesLeft = ReadMeterFrames;
+		if (Audio != nullptr)
+		{
+			const AHWCharacterBase* B = BossFighter.Get();
+			Audio->OnRead(B != nullptr ? B->GetActorLocation() : FVector::ZeroVector, KeeperIdentity);
+		}
+		Rumble(1.f, 0.3f);
 	}
 }
 

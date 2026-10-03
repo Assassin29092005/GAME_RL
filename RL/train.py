@@ -4,7 +4,12 @@
                                                           sessions: the sanity check (it learns THAT bot's counter)
     python RL/train.py --stage rl2                       recurrent PPO vs the curriculum population: the reader
     python RL/train.py --stage rl3 --init <rl2 ckpt>     rl2 continued, with evaluation gates logged as it trains
-    python RL/train.py --resume RL/checkpoints/<run>/latest.pt    continue a run exactly where it stopped
+    python RL/train.py --resume RL/checkpoints/<run>/latest.pt    continue a run exactly where it stopped (every saved
+                                                          setting is restored unless given again; a new --steps
+                                                          continues the lr / entropy decay from where it was)
+    python RL/train.py --stage rl2 --league ...          RL-4: at --league-at fractions of the run, freeze the keeper,
+                                                          train --league-exploiters exploiters against it (exploit.py)
+                                                          and add them to the population
 
 Common: --envs N --steps TOTAL_DECISIONS --run NAME --device cuda|cpu --seed S [--backend auto|dll|mock]
 Smoke test without the DLL: --backend mock --envs 64 --num-steps 64 --max-iterations 2 --small
@@ -45,9 +50,21 @@ CKPT_DIR = HERE / "checkpoints"
 
 # Per-stage defaults (DESIGN.md §9 "Stages"). Anything given on the command line overrides them.
 STAGES: Dict[str, dict] = {
-	"rl1": {"recurrent": False, "players": "habitual", "fights": 1, "steps": 20_000_000, "envs": 1024, "gate_every": 0},
-	"rl2": {"recurrent": True, "players": "population", "fights": None, "steps": 100_000_000, "envs": 4096, "gate_every": 0},
-	"rl3": {"recurrent": True, "players": "population", "fights": None, "steps": 100_000_000, "envs": 4096, "gate_every": 50},
+	"rl1": {"recurrent": False, "players": "habitual", "fights": 1, "steps": 20_000_000, "envs": 1024, "gate_every": 0, "read_every": 0},
+	"rl2": {"recurrent": True, "players": "population", "fights": None, "steps": 1_000_000_000, "envs": 4096, "gate_every": 100,
+		"read_every": 50},
+	"rl3": {"recurrent": True, "players": "population", "fights": None, "steps": 100_000_000, "envs": 4096, "gate_every": 50,
+		"read_every": 50},
+}
+
+# Every setting a resumed run restores from its checkpoint unless it is given again on the command line (review
+# finding: --resume used to fall back to the CLI defaults silently). name -> default for a fresh run.
+RESUMABLE = {
+	"target_spm": 66.0, "max_fight_seconds": 180, "seed": 1, "num_steps": 128, "bptt": 32, "epochs": 4, "minibatches": 8,
+	"lr": 3e-4, "lr_final": 3e-5, "ent_coef": 0.01, "ent_coef_final": 0.001, "lambda_lr": 0.01, "no_cost": False,
+	"tf32": False, "style_scale": 1.0, "league": False, "league_at": "0.3,0.5,0.7,0.85", "league_exploiters": 2,
+	"league_decisions": 4e7, "league_envs": 2048, "read_every": None, "gate_every": None, "keeper_full_skill_p": 0.5,
+	"exploit_fraction": 0.12, "ref_fraction": 0.2,
 }
 
 CSV_BASE = ["iteration", "decisions", "elapsed_s", "decisions_per_s", "rollout_decisions_per_s", "update_samples_per_s",
@@ -60,36 +77,58 @@ CSV_GROUPS = [f"win_{g}" for g in players_mod.GROUPS_TRAIN + ("fixed",)] + \
 	[f"reward_{g}" for g in players_mod.GROUPS_TRAIN + ("fixed",)] + \
 	[f"spm_{g}" for g in players_mod.GROUPS_TRAIN + ("fixed",)]
 CSV_GATES = ["gate_dmg_ratio_low", "gate_dmg_ratio_high", "gate_spm_ratio_low", "gate_hit_rl_low", "gate_hit_script_low"]
-CSV_FIELDS = CSV_BASE + CSV_GROUPS + CSV_GATES
+# The reading test, logged during training (habits.flat_metrics) — RL.md's evidence, watched as it develops.
+CSV_READ = ["read_js_early", "read_js_late", "read_switch_pre", "read_switch_post", "read_switch_recovered"] + \
+	[f"read_{g}_{m}" for g in ("parrier", "blocker", "stepleft", "stepright") for m in ("hit_early", "hit_late", "counter_late")]
+# The three keepers' personalities (env.py pop_stats "keepers").
+KEEPER_STATS = ("swings_per_min", "reads_per_min", "style_reward_per_min", "feint_share", "heavy_share", "evade_share",
+	"feint_bites_per_min", "evasions_per_min", "guard_breaks_per_min", "pressure_blocks_per_min")
+CSV_KEEPERS = [f"keeper_{k}_{m}" for k in ("Warden", "Sage", "Returned") for m in KEEPER_STATS]
+CSV_LEAGUE = ["league_round", "league_exploiters", "league_player_win_rate", "league_exchange", "league_baseline_exchange",
+	"skipped_updates"]
+CSV_FIELDS = CSV_BASE + CSV_GROUPS + CSV_GATES + CSV_READ + CSV_KEEPERS + CSV_LEAGUE
 
 
 def parse_args(argv=None):
 	ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-	ap.add_argument("--stage", choices=sorted(STAGES), default="rl2")
+	ap.add_argument("--stage", choices=sorted(STAGES), default=None, help="rl1 | rl2 | rl3 (default rl2; a resumed run keeps its own)")
 	ap.add_argument("--envs", type=int, default=None)
 	ap.add_argument("--steps", type=float, default=None, help="total decisions (e.g. 1e8)")
 	ap.add_argument("--run", default=None, help="run name (default <stage>-<timestamp>)")
 	ap.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
-	ap.add_argument("--seed", type=int, default=1)
+	ap.add_argument("--seed", type=int, default=None)
 	ap.add_argument("--resume", default=None, help="checkpoint to continue (model + optimizer + curriculum + counters)")
 	ap.add_argument("--init", default=None, help="checkpoint to start from (weights only; e.g. rl3 from rl2)")
 	ap.add_argument("--backend", choices=("auto", "dll", "mock"), default="auto")
 	ap.add_argument("--threads", type=int, default=0, help="C++ env worker threads (0 = hardware concurrency)")
 	ap.add_argument("--players", default=None, help=f"player set override ({', '.join(players_mod.PLAYER_SETS)})")
-	ap.add_argument("--target-spm", type=float, default=66.0, help="aggression target (FRLConfig default 66)")
-	ap.add_argument("--max-fight-seconds", type=int, default=180)
-	# PPO
-	ap.add_argument("--num-steps", type=int, default=128)
-	ap.add_argument("--bptt", type=int, default=32)
-	ap.add_argument("--epochs", type=int, default=4)
-	ap.add_argument("--minibatches", type=int, default=8)
-	ap.add_argument("--lr", type=float, default=3e-4)
-	ap.add_argument("--lr-final", type=float, default=3e-5)
-	ap.add_argument("--ent-coef", type=float, default=0.01)
-	ap.add_argument("--ent-coef-final", type=float, default=0.001)
-	ap.add_argument("--lambda-lr", type=float, default=0.01)
-	ap.add_argument("--no-cost", action="store_true", help="disable the aggression constraint")
-	ap.add_argument("--tf32", action="store_true", help="TF32 matmuls (faster; rollout/update ratio no longer exactly 1)")
+	ap.add_argument("--target-spm", type=float, default=None, help="aggression target at skill 1 (FRLConfig default 66)")
+	ap.add_argument("--max-fight-seconds", type=int, default=None)
+	ap.add_argument("--style-scale", type=float, default=None, help="per-identity style rewards x this (0 = off; default 1)")
+	ap.add_argument("--keeper-full-skill-p", type=float, default=None, help="sessions with the keeper at skill 1 (default 0.5)")
+	# PPO (defaults in RESUMABLE)
+	ap.add_argument("--num-steps", type=int, default=None)
+	ap.add_argument("--bptt", type=int, default=None)
+	ap.add_argument("--epochs", type=int, default=None)
+	ap.add_argument("--minibatches", type=int, default=None)
+	ap.add_argument("--lr", type=float, default=None)
+	ap.add_argument("--lr-final", type=float, default=None)
+	ap.add_argument("--ent-coef", type=float, default=None)
+	ap.add_argument("--ent-coef-final", type=float, default=None)
+	ap.add_argument("--lambda-lr", type=float, default=None)
+	ap.add_argument("--lambda-floor", type=float, default=0.0,
+		help="raise the aggression multiplier to at least this at the start (a fine-tune that must restore the floor)")
+	ap.add_argument("--no-cost", action="store_true", default=None, help="disable the aggression constraint")
+	ap.add_argument("--tf32", action="store_true", default=None, help="TF32 matmuls (faster; rollout/update ratio no longer exactly 1)")
+	# RL-4 league
+	ap.add_argument("--league", action="store_true", default=None, help="train exploiters at --league-at and add them")
+	ap.add_argument("--league-at", default=None, help="fractions of the run where a league round runs (default 0.3,0.5,0.7,0.85)")
+	ap.add_argument("--league-exploiters", type=int, default=None, help="exploiters per round (default 2)")
+	ap.add_argument("--league-decisions", type=float, default=None, help="player decisions per exploiter (default 4e7)")
+	ap.add_argument("--league-envs", type=int, default=None)
+	ap.add_argument("--exploit-fraction", type=float, default=None, help="population share of exploiters once present (default 0.12)")
+	ap.add_argument("--ref-fraction", type=float, default=None, help="population share of the reference bots (default 0.2; B0 grades against them)")
+	ap.add_argument("--read-every", type=int, default=None, help="iterations between in-training reading tests (0 = off)")
 	# network
 	ap.add_argument("--small", action="store_true", help="a small network (smoke tests)")
 	ap.add_argument("--hidden", type=int, default=256)
@@ -98,7 +137,7 @@ def parse_args(argv=None):
 	# bookkeeping
 	ap.add_argument("--save-every", type=int, default=25, help="iterations between checkpoints + .hwrl exports")
 	ap.add_argument("--log-every", type=int, default=1)
-	ap.add_argument("--gate-every", type=int, default=None, help="iterations between evaluation gates (0 = off)")
+	ap.add_argument("--gate-every", type=int, default=None, help="iterations between B0-lite gates vs the script (0 = off)")
 	ap.add_argument("--max-iterations", type=int, default=None, help="stop after this many iterations (smoke tests)")
 	ap.add_argument("--no-tensorboard", action="store_true")
 	ap.add_argument("--quiet", action="store_true")
@@ -146,6 +185,12 @@ def _tb_name(k: str) -> str:
 			("gate_", "gate/"), ("curriculum_", "curriculum/")):
 		if k.startswith(prefix) and k not in ("reward_per_fight", "reward_per_decision"):
 			return group + k[len(prefix):]
+	if k.startswith("read_"):
+		return "reading/" + k[5:]
+	if k.startswith("keeper_"):
+		return "keepers/" + k[7:]
+	if k.startswith("league_"):
+		return "league/" + k[7:]
 	if k in ("pg_loss", "v_loss", "aux_loss", "loss", "entropy", "approx_kl", "clipfrac", "grad_norm", "aux_acc",
 			"explained_variance", "ratio_dev_first_mb", "lr", "ent_coef", "return_std"):
 		return "train/" + k
@@ -155,6 +200,15 @@ def _tb_name(k: str) -> str:
 
 
 def build_row(it: Dict[str, float], env_stats: dict, players, elapsed: float) -> Dict[str, float]:
+	row = _build_row(it, env_stats, players, elapsed)
+	for k, d in env_stats.get("keepers", {}).items():
+		for m in KEEPER_STATS:
+			row[f"keeper_{k}_{m}"] = d.get(m, float("nan"))
+	row["skipped_updates"] = it.get("skipped_updates", 0)
+	return row
+
+
+def _build_row(it: Dict[str, float], env_stats: dict, players, elapsed: float) -> Dict[str, float]:
 	groups = env_stats["groups"]
 	allg = groups.get("all", {})
 	nan = float("nan")
@@ -210,8 +264,20 @@ def export_policy(model, path: Path) -> Optional[str]:
 		return None
 
 
+def model_is_finite(trainer: PPOTrainer) -> bool:
+	if not all(bool(torch.isfinite(p).all()) for p in trainer.model.parameters()):
+		return False
+	return math.isfinite(trainer.normalizer.std()) and math.isfinite(trainer.lam)
+
+
 def save_all(ckpt_dir: Path, trainer: PPOTrainer, players, args, stage_cfg: dict, tag: str) -> Path:
 	ckpt_dir.mkdir(parents=True, exist_ok=True)
+	if not model_is_finite(trainer):
+		# Review finding: a NaN model used to overwrite latest.pt / latest.hwrl (and a resume would continue from NaN).
+		path = ckpt_dir / f"ckpt_nan_{tag}.pt"
+		save_checkpoint(str(path), trainer.model, {"stage": args.stage, "run": args.run, "iteration": trainer.iteration, "nonfinite": True})
+		print(f"[train] the model is not finite: wrote only {path.name}; latest.* untouched")
+		return path
 	extra = {
 		"stage": args.stage, "run": args.run, "args": {k: v for k, v in vars(args).items()}, "stage_cfg": stage_cfg,
 		"trainer": trainer.state_dict(), "players": players.state_dict(), "obs_layout_version": hwcore.OBS_LAYOUT_VERSION,
@@ -253,6 +319,45 @@ def run_gate(trainer: PPOTrainer, ckpt_dir: Path, seed: int) -> Dict[str, float]
 	return out
 
 
+def run_reading(trainer: PPOTrainer, ckpt_dir: Path, sessions: int = 128) -> Dict[str, float]:
+	"""The reading test on the current weights (C++, a few seconds): logged so RL.md's evidence is watched as it grows."""
+	if not hwcore.available():
+		return {}
+	path = export_policy(trainer.model, ckpt_dir / "read_gate.hwrl")
+	if path is None:
+		return {}
+	import habits
+	with hwcore.Policy(path) as pol:
+		return habits.flat_metrics(habits.reading_test(pol, sessions=sessions))
+
+
+def league_round(trainer: PPOTrainer, env, players, ckpt_dir: Path, args, round_index: int, kept: list) -> Dict[str, float]:
+	"""RL-4: freeze the keeper, train exploiters against it, register them in the env batch, add them to the population."""
+	import exploit
+	boss = export_policy(trainer.model, ckpt_dir / f"league_r{round_index}_keeper.hwrl")
+	if boss is None:
+		return {}
+	base = exploit.baseline_exchange(boss)
+	print(f"[league] round {round_index}: the frozen keeper vs the reference bots (skill 0.9): exchange {base['exchange']:.3f}", flush=True)
+	wins, exch = [], []
+	for k in range(int(args.league_exploiters)):
+		out = ckpt_dir / f"exploiter_r{round_index}_{k}.hwrl"
+		r = exploit.train_exploiter(boss, str(out), args.league_decisions, args.league_envs, seed=1000 * round_index + 17 * k + args.seed,
+			device=str(trainer.device), threads=args.threads)
+		pol = hwcore.Policy(str(out))
+		pid = env.batch.add_player_policy(pol)
+		kept.append(pol)
+		# Later rounds (stronger keepers' holes) weigh more; a stronger exploiter weighs more.
+		players.add_exploiter(pid, str(out), round_index, weight=(1.0 + round_index) * (1.0 + min(r["exchange"], 2.0)))
+		wins.append(r["player_win_rate"])
+		exch.append(r["exchange"])
+		print(f"[league] exploiter {out.name}: player wins {r['player_win_rate']:.2f}, exchange {r['exchange']:.3f} "
+			f"(baseline {base['exchange']:.3f}) -> policy {pid}", flush=True)
+	return {"league_round": round_index, "league_exploiters": len(players.exploiters),
+		"league_player_win_rate": float(np.mean(wins)) if wins else float("nan"),
+		"league_exchange": float(np.mean(exch)) if exch else float("nan"), "league_baseline_exchange": base["exchange"]}
+
+
 # =====================================================================================================================
 # Main
 # =====================================================================================================================
@@ -261,11 +366,12 @@ def main(argv=None) -> int:
 	args = parse_args(argv)
 	resume_extra = None
 	resume_model = None
+	saved: dict = {}
 	if args.resume:
 		resume_model, resume_extra = load_checkpoint(args.resume)
 		saved = resume_extra.get("args", {})
-		# A resumed run keeps its identity (stage, run name, sizes) unless explicitly overridden.
-		args.stage = saved.get("stage", args.stage)
+		# A resumed run keeps its identity (stage, run name, sizes) and every setting unless explicitly overridden.
+		args.stage = args.stage or saved.get("stage")
 		args.run = args.run or saved.get("run")
 		if args.envs is None:
 			args.envs = saved.get("envs")
@@ -273,6 +379,10 @@ def main(argv=None) -> int:
 			args.steps = saved.get("steps")
 		if args.players is None:
 			args.players = saved.get("players")
+	args.stage = args.stage or "rl2"
+	for k, default in RESUMABLE.items():
+		if getattr(args, k, None) is None:
+			setattr(args, k, saved.get(k, default) if k in saved else default)
 	stage = dict(STAGES[args.stage])
 	if args.stage == "rl3" and not (args.init or args.resume):
 		print("[train] rl3 continues rl2: pass --init <rl2 checkpoint> (or --resume an rl3 run)")
@@ -281,6 +391,7 @@ def main(argv=None) -> int:
 	args.steps = float(args.steps or stage["steps"])
 	args.players = args.players or stage["players"]
 	gate_every = stage["gate_every"] if args.gate_every is None else args.gate_every
+	read_every = stage.get("read_every", 0) if args.read_every is None else args.read_every
 	args.run = args.run or f"{args.stage}-{time.strftime('%Y%m%d-%H%M%S')}"
 	run_dir, ckpt_dir = RUNS_DIR / args.run, CKPT_DIR / args.run
 
@@ -302,18 +413,27 @@ def main(argv=None) -> int:
 			players.load_state_dict(resume_extra["players"])
 		except Exception as e:
 			print(f"[train] could not restore the player source state ({e}); starting it fresh")
+	if isinstance(players, players_mod.Population):
+		players.exploit_fraction = float(args.exploit_fraction)
+		players.ref_fraction = float(args.ref_fraction)
+		players.vary_keeper = bool(stage["recurrent"])
+		players.full_skill_p = float(args.keeper_full_skill_p)
+	else:
+		# rl1 (one fixed bot): the keeper at full strength as the Warden — the sanity check stays the sanity check.
+		pass
 
 	# Environment.
 	cfg_env = hwcore.env_config(max_fight_seconds=args.max_fight_seconds, target_spm=args.target_spm,
-		num_threads=args.threads)
+		num_threads=args.threads, style_scale=args.style_scale)
 	env = env_mod.make_env(args.envs, players, seed=args.seed, backend=args.backend, config=cfg_env,
 		pin_memory=(device.type == "cuda"))
 
 	# Model.
+	init_extra = None
 	if resume_model is not None:
 		model = resume_model
 	elif args.init:
-		init_model, _ = load_checkpoint(args.init)
+		init_model, init_extra = load_checkpoint(args.init)
 		model = init_model
 		if model.recurrent != stage["recurrent"]:
 			print(f"[train] note: --init network recurrent={model.recurrent}, stage wants {stage['recurrent']}; keeping the checkpoint's")
@@ -324,19 +444,51 @@ def main(argv=None) -> int:
 			token_vocab=hwcore.TOKEN_VOCAB, history_tokens=hwcore.HISTORY_TOKENS, recurrent=stage["recurrent"], side=0,
 			**sizes)
 
-	ppo_cfg = PPOConfig(num_steps=args.num_steps, bptt=args.bptt, epochs=args.epochs, minibatches=args.minibatches,
+	# Fields without a CLI flag (cost_budget, gamma, ...) come from the resumed run's own config.
+	base_cfg = dict(resume_extra["trainer"].get("ppo_config", {})) if resume_extra and "trainer" in resume_extra else {}
+	base_cfg = {k: v for k, v in base_cfg.items() if k in PPOConfig.__dataclass_fields__}
+	base_cfg.update(num_steps=args.num_steps, bptt=args.bptt, epochs=args.epochs, minibatches=args.minibatches,
 		lr=args.lr, lr_final=args.lr_final, ent_coef=args.ent_coef, ent_coef_final=args.ent_coef_final,
 		lambda_lr=args.lambda_lr, use_cost=not args.no_cost, tf32=args.tf32)
+	ppo_cfg = PPOConfig(**base_cfg)
 	per_iter = args.envs * args.num_steps
 	total_iters = max(1, int(math.ceil(args.steps / per_iter)))
 	trainer = PPOTrainer(model, env, ppo_cfg, device=device, total_iterations=total_iters, seed=args.seed)
 	if resume_extra and "trainer" in resume_extra:
 		trainer.load_state_dict(resume_extra["trainer"])
-		trainer.total_iterations = total_iters
+		if total_iters != trainer.total_iterations:
+			print(f"[train] the run's length changes on resume: {trainer.total_iterations} -> {total_iters} iterations; the lr / "
+				f"entropy decay continues from where it was")
+		trainer.set_total_iterations(total_iters)
+		if trainer.iteration >= total_iters:
+			print(f"[train] warning: the run is already at iteration {trainer.iteration} of {total_iters}")
+	if args.lambda_floor and trainer.lam < args.lambda_floor:
+		print(f"[train] aggression multiplier {trainer.lam:.3f} -> {args.lambda_floor:.3f} (--lambda-floor)")
+		trainer.lam = float(args.lambda_floor)
+	elif args.init and init_extra and "trainer" in init_extra:
+		# rl3 continues rl2: keep its Lagrange multiplier and its return scale (review finding: they were dropped, so
+		# the 'constraints hold' stage started with no aggression penalty and a mis-scaled value target).
+		ts = init_extra["trainer"]
+		trainer.lam = float(ts.get("lambda", trainer.lam))
+		if "normalizer" in ts:
+			trainer.normalizer.rms.load_state_dict(ts["normalizer"]["rms"])
+		print(f"[train] --init: lambda {trainer.lam:.3f}, return std {trainer.normalizer.std():.3f} from {args.init}")
+
+	# RL-4: exploiters registered by earlier league rounds (resume) go back into this batch, in their original order.
+	league_kept: list = []
+	if isinstance(players, players_mod.Population) and players.exploiters and env.backend == "dll":
+		for e in players.exploiters:
+			pol = hwcore.Policy(e["path"])
+			e["id"] = env.batch.add_player_policy(pol)
+			league_kept.append(pol)
+		print(f"[train] re-registered {len(players.exploiters)} exploiters from the checkpoint")
+	league_at = sorted({float(x) for x in str(args.league_at).split(",") if x.strip()}) if args.league else []
+	league_done = {int(e["round"]) for e in getattr(players, "exploiters", [])}
 
 	# Run folder.
 	run_dir.mkdir(parents=True, exist_ok=True)
-	with open(run_dir / "config.json", "w") as fh:
+	cfg_name = "config.json" if not args.resume else f"config_resume_{trainer.iteration:06d}.json"
+	with open(run_dir / cfg_name, "w") as fh:
 		json.dump({"args": vars(args), "stage": stage, "ppo": ppo_cfg.__dict__, "model": model.config,
 			"backend": env.backend, "device": str(device), "total_iterations": total_iters}, fh, indent=2, default=str)
 	logger = Logger(run_dir, use_tb=not args.no_tensorboard, resume=bool(args.resume))
@@ -375,9 +527,28 @@ def main(argv=None) -> int:
 					it.update(run_gate(trainer, ckpt_dir, args.seed))
 				except Exception as e:
 					print(f"[train] gate failed: {type(e).__name__}: {e}")
+			if read_every and trainer.iteration % read_every == 0:
+				try:
+					rd = run_reading(trainer, ckpt_dir)
+					it.update(rd)
+					if rd and not args.quiet:
+						print(f"[read] JS {rd['read_js_early']:.3f} -> {rd['read_js_late']:.3f} | switch {rd['read_switch_pre']:.2f} -> "
+							f"{rd['read_switch_post']:.2f} -> {rd['read_switch_recovered']:.2f} | late counters: parry "
+							f"{rd['read_parrier_counter_late']:.2f} block {rd['read_blocker_counter_late']:.2f} left "
+							f"{rd['read_stepleft_counter_late']:.2f} right {rd['read_stepright_counter_late']:.2f}", flush=True)
+				except Exception as e:
+					print(f"[train] reading test failed: {type(e).__name__}: {e}")
+			for r_i, frac in enumerate(league_at):
+				if r_i not in league_done and trainer.iteration >= int(frac * total_iters):
+					league_done.add(r_i)
+					try:
+						it.update(league_round(trainer, env, players, ckpt_dir, args, r_i, league_kept))
+						save_all(ckpt_dir, trainer, players, args, stage, f"{trainer.iteration:06d}_league{r_i}")
+					except Exception as e:
+						print(f"[league] round {r_i} failed: {type(e).__name__}: {e}")
 			if trainer.iteration % max(1, args.log_every) == 0:
 				row = build_row(it, env_stats, players, time.time() - t_start)
-				row.update({k: v for k, v in it.items() if k.startswith("gate_")})
+				row.update({k: v for k, v in it.items() if k.startswith(("gate_", "read_", "league_"))})
 				logger.log(row, trainer.decisions)
 				if not args.quiet:
 					print(f"[{trainer.iteration:5d}/{total_iters}] dec {trainer.decisions:.3g} | {it['decisions_per_s']:,.0f} dec/s "
@@ -393,7 +564,10 @@ def main(argv=None) -> int:
 		exit_code = 130
 	finally:
 		signal.signal(signal.SIGINT, old_handler)
-		if trainer.iteration > last_save_iter or iters_this_run == 0 or not (ckpt_dir / "latest.pt").exists():
+		if exit_code == 3:
+			print("[train] stopped on a non-finite loss: latest.pt / latest.hwrl keep the last good checkpoint")
+			save_all(ckpt_dir, trainer, players, args, stage, f"{trainer.iteration:06d}")   # writes only ckpt_nan_* if poisoned
+		elif trainer.iteration > last_save_iter or iters_this_run == 0 or not (ckpt_dir / "latest.pt").exists():
 			path = save_all(ckpt_dir, trainer, players, args, stage, f"{trainer.iteration:06d}")
 			print(f"[train] final checkpoint: {path}")
 		logger.close()

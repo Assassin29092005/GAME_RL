@@ -86,6 +86,30 @@ namespace
 			if (UHWDuelSubsystem* D = DuelOf(World)) { D->bDebugDraw = Args.Num() > 0 ? FCString::Atoi(*Args[0]) != 0 : !D->bDebugDraw; }
 		}));
 
+	AHWPlayerController* MenuController(UWorld* World)
+	{
+		return World != nullptr ? Cast<AHWPlayerController>(World->GetFirstPlayerController()) : nullptr;
+	}
+
+	FAutoConsoleCommandWithWorldAndArgs GHWMenu(
+		TEXT("hw.Menu"),
+		TEXT("hw.Menu pause|settings|controls|graphics|audio|accessibility|tutorial|notebook|close - open a menu page (scripted checks)."),
+		FConsoleCommandWithWorldAndArgsDelegate::CreateLambda([](const TArray<FString>& Args, UWorld* World)
+		{
+			if (AHWPlayerController* PC = MenuController(World)) { PC->OpenMenuPage(Args.Num() > 0 ? Args[0] : FString(TEXT("pause"))); }
+		}));
+
+	FAutoConsoleCommandWithWorldAndArgs GHWMenuNav(
+		TEXT("hw.MenuNav"),
+		TEXT("hw.MenuNav up|down|left|right|accept|back|tabnext|tabprev|toggle [repeat] - drive the open menu like a pad (scripted checks)."),
+		FConsoleCommandWithWorldAndArgsDelegate::CreateLambda([](const TArray<FString>& Args, UWorld* World)
+		{
+			AHWPlayerController* PC = MenuController(World);
+			if (PC == nullptr || Args.Num() == 0) { return; }
+			const int32 Repeat = Args.Num() > 1 ? FMath::Clamp(FCString::Atoi(*Args[1]), 1, 50) : 1;
+			for (int32 I = 0; I < Repeat; ++I) { PC->MenuCommand(Args[0]); }
+		}));
+
 	FAutoConsoleCommandWithWorldAndArgs GHWResetModel(
 		TEXT("hw.ResetModel"),
 		TEXT("hw.ResetModel - forget everything the keepers have learned about you this session."),

@@ -57,7 +57,7 @@ def _orthogonal_(weight: torch.Tensor, gain: float) -> None:
 class HellwalkerNet(nn.Module):
     """The keeper's policy: encoder + token pool + GRU (or feed-forward) + policy / value / read heads."""
 
-    def __init__(self, obs_dim: int = 103, num_actions: int = 23, aux_classes: int = 12,
+    def __init__(self, obs_dim: int = 107, num_actions: int = 23, aux_classes: int = 12,
                  token_vocab: Sequence[int] = DEFAULT_TOKEN_VOCAB, history_tokens: int = 32, enc_hidden: int = 256,
                  embed_dim: int = 32, hidden: int = 256, recurrent: bool = True, side: int = 0):
         super().__init__()
@@ -66,9 +66,15 @@ class HellwalkerNet(nn.Module):
             raise ValueError("HellwalkerNet: every size must be positive")
         if history_tokens < 0 or len(token_vocab) > 16 or any(v <= 0 for v in token_vocab):
             raise ValueError("HellwalkerNet: bad token layout (HWRLPolicy.cpp allows <= 16 fields, vocab > 0)")
-        # The C++ loader caps these (FRLPolicyOutput::MaxActions / MaxAux).
+        # The C++ loader caps these (FRLPolicyOutput::MaxActions / MaxAux), and a boss policy's recurrent state must fit
+        # the session memory (RL::MaxHidden = FRLSession::MaxHidden): the loader refuses a bigger one, so refuse it here,
+        # before hours of training.
         if num_actions > 32 or aux_classes > 16:
             raise ValueError("HellwalkerNet: num_actions <= 32 and aux_classes <= 16 (HWRLPolicy.h)")
+        if side not in (0, 1):
+            raise ValueError("HellwalkerNet: side is 0 (the keeper) or 1 (a player / exploiter)")
+        if side == 0 and hidden > 512:
+            raise ValueError("HellwalkerNet: a keeper's hidden size must be <= 512 (RL::MaxHidden, the session memory)")
 
         self.obs_dim = int(obs_dim)
         self.num_actions = int(num_actions)

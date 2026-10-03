@@ -71,14 +71,27 @@ namespace HW
 		bool IsRecurrent() const { return bRecurrent; }
 		/** 0 = a boss policy (RL::ObsDim / NumActions), 1 = a player policy (exploiter, RL/native). */
 		int32_t Side() const { return PolicySide; }
+		int32_t HistoryTokens() const { return NTok; }
+		int32_t TokenFields() const { return NFields; }
+		/** A policy the keeper brain can run: a loaded boss policy of this build's layout whose memory fits a session. */
+		bool IsBossPlayable() const
+		{
+			return bLoaded && PolicySide == 0 && NObs == RL::ObsDim && NAct == RL::NumActions && NAux == RL::NumAnswerClasses
+				&& NTok == RL::HistoryTokens && NFields == RL::TokenFields && NHidden > 0 && NHidden <= RL::MaxHidden;
+		}
 
 		/**
 		 * One decision. Obs: ObsDim floats. Tokens: HistoryTokens x TokenFields int8. Mask: NumActions bytes (null = all
-		 * allowed). HiddenIn / HiddenOut: HiddenSize floats (may alias; HiddenIn null = zeros). Not thread-safe per
-		 * instance (scratch buffers) — give each thread its own FRLPolicy, or copy.
+		 * allowed). HiddenIn / HiddenOut: HiddenSize floats (may alias; HiddenIn null = zeros). This overload uses the
+		 * policy's own scratch, so it is not thread-safe per instance — threads sharing one policy pass their own
+		 * scratch (ScratchSize() floats) to the overload below.
 		 */
 		void Forward(const float* Obs, const int8_t* Tokens, const uint8_t* Mask, const float* HiddenIn, float* HiddenOut,
 			FRLPolicyOutput& Out) const;
+		/** The same, with caller-owned scratch of at least ScratchSize() floats: a shared const policy, many threads. */
+		void Forward(const float* Obs, const int8_t* Tokens, const uint8_t* Mask, const float* HiddenIn, float* HiddenOut,
+			FRLPolicyOutput& Out, float* ExternalScratch) const;
+		int32_t ScratchSize() const { return static_cast<int32_t>(Scratch.size()); }
 		/** The read head for action A, given the NEW hidden state from Forward. OutProbs: AuxClasses floats (softmax). */
 		void Aux(const float* Hidden, int32_t Action, float* OutProbs) const;
 

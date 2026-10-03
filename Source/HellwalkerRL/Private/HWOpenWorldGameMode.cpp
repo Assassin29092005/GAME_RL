@@ -83,6 +83,7 @@ AHWOpenWorldGameMode::AHWOpenWorldGameMode()
 	PlayerControllerClass = AHWPlayerController::StaticClass();
 	HUDClass = AHWHUD::StaticClass();
 	PrimaryActorTick.bCanEverTick = true;
+	PrimaryActorTick.bTickEvenWhenPaused = true; // only the scripted checks run while paused (see Tick)
 }
 
 void AHWOpenWorldGameMode::InitGame(const FString& MapName, const FString& Options, FString& ErrorMessage)
@@ -483,7 +484,7 @@ void AHWOpenWorldGameMode::BeginDuel(int32 ShrineIndex)
 	// Register the duel BEFORE possessing: the controller picks combat input and lock-on from it.
 	const EHWTier Tier = (Save->Mode == EHWPlayMode::Pathbreaker && !Spec.bFinal) ? EHWTier::Pathbreaker : EHWTier::Hellwalker;
 	Duel->BossTitle = Spec.Title;
-	Duel->ConfigureBoss(Spec.Script, Spec.HealthScale);
+	Duel->ConfigureBoss(Spec.Script, Spec.HealthScale, Spec.bFinal ? 2 : (Spec.Script == 1 ? 1 : 0)); // Warden, Sage, the Returned
 	Duel->SetArenaSpawns(Shrine->PlayerSpawn(), Shrine->BossSpawn(), Yaw);
 	Duel->RegisterFighters(Soul, Boss);
 	Duel->StartEncounter(Tier);
@@ -603,6 +604,7 @@ void AHWOpenWorldGameMode::Tick(float DeltaSeconds)
 {
 	Super::Tick(DeltaSeconds);
 	Automation.Tick(GetWorld(), DeltaSeconds);
+	if (GetWorld() != nullptr && GetWorld()->IsPaused()) { return; } // the pause menu: the walk's own clock stops
 	PhaseSeconds += DeltaSeconds;
 	if (ExplorerBody.IsValid() && ExplorerLook.IsValid() && (ExplorerBody->IsVisible() || !ExplorerLook->IsVisible()))
 	{

@@ -25,13 +25,24 @@
 
 namespace HW
 {
-	/** Runtime knobs (not part of the layout contract). */
+	/** Runtime knobs (not part of the layout contract). Skill and identity are read at BeginEncounter (fixed for a fight). */
 	struct FRLConfig
 	{
-		/** Aggression target (swings/min) — the ObsSwingDeficit feature; the trainer's constraint uses the same value. */
+		/** Aggression target (swings/min) at skill 1 — ObsSwingDeficit measures against RL::TargetSwingsPerMin(this, Skill);
+		 *  the trainer's constraint uses the same value. */
 		float TargetSwingsPerMin = 66.f;
 		/** The READ banner needs the read head at least this sure of the answer it predicted. */
 		float ReadMeterMinP = RL::ReadMeterMinP;
+		/** Difficulty in [0, 1] (RL::SkillParams): 1 = the Hellwalker tier. An input of the network (ObsSkill). */
+		float Skill = 1.f;
+		/** Which keeper (RL::EKeeper): an input of the network (ObsIdentity). */
+		int32_t Identity = 0;
+		/** The game's Easy breather (RL::EasySwingGap): an attack that opens a string needs at least this many frames since
+		 *  the keeper's last attack COMMIT (so the rest after a slow attack is shorter); 0 = off. Never set in training and
+		 *  not an input of the network (unlike the grab / killer cooldowns, which are observed): the policy is unchanged, but
+		 *  it meets a mask it never trained with, so its effect is measured (eval.py ladder), not assumed. The swing-deficit
+		 *  input's target is capped at what the breather allows (BeginEncounter). */
+		int32_t MinSwingGap = 0;
 	};
 
 	/**
@@ -41,7 +52,7 @@ namespace HW
 	 */
 	struct FRLSession
 	{
-		static constexpr int32_t MaxHidden = 512;
+		static constexpr int32_t MaxHidden = RL::MaxHidden;
 		float   Hidden[MaxHidden] = {};
 		int32_t HiddenSize = 0;          // 0 = fresh (all zeros)
 		int8_t  Tokens[RL::HistoryTokens][RL::TokenFields] = {}; // newest first; all-zero rows = padding
@@ -106,6 +117,10 @@ namespace HW
 		int32_t IllegalActions() const { return Illegal; }         // masked actions that were requested anyway
 		int32_t LastDecisionFrame() const { return LastDecision; }
 		int32_t LastAction() const { return LastActionIndex; }
+		/** The skill's perception delay, decision gap, string length and cooldowns for this fight. */
+		const RL::FSkillParams& Params() const { return SkillP; }
+		/** The aggression target for this fight (Config.TargetSwingsPerMin at the fight's skill). */
+		float TargetSwingsPerMin() const { return Target; }
 
 	private:
 		struct FSnap
@@ -145,13 +160,18 @@ namespace HW
 
 		// Fixed capacity everywhere: thousands of observers run side by side in training, and nothing may grow with
 		// the length of a fight.
-		static constexpr int32_t SnapRing = 32;    // > PerceptionFrames + the velocity window
+		static constexpr int32_t SnapRing = 32;    // > MaxPerceptionFrames + the velocity window
+		static_assert(SnapRing > RL::MaxPerceptionFrames + 4 + 1, "the snapshot ring must cover the slowest skill's perception");
 		static constexpr int32_t EventRing = 64;   // player events awaiting perception
 		static constexpr int32_t MaxOpen = 8;      // tokens not yet perceivable in full
 		static constexpr int32_t SwingRing = 128;  // own attack commits (the 30 s swing-rate window: chained fast slashes
 		                                           // can commit every 22 frames, ~82 in 1800 frames, so 64 could undercount)
 
 		FRLSession* Session = nullptr;
+		RL::FSkillParams SkillP;                   // this fight's (from Config.Skill at BeginEncounter)
+		float   Target = 66.f;                     // this fight's aggression target
+		int32_t Identity = 0;                      // this fight's keeper (from Config.Identity, clamped)
+		int32_t MinGap = 0;                        // this fight's breather (from Config.MinSwingGap)
 		bool    bMirrorY = false;                  // the last geometry's handedness (the keeper's commit facing is mirrored too)
 		FSnap   Snaps[SnapRing];                   // Snaps[F % SnapRing] = the state at the START of frame F
 		int32_t FirstSnapFrame = 0;                // oldest frame still recorded this fight

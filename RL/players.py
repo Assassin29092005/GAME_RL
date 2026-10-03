@@ -8,7 +8,12 @@ The policy can only learn to read the kinds of players it meets, so the populati
   with alpha from the curriculum band (band 0 strong habits ... band 3 near random), random timing / reads / noise, and
   a mid-session habit switch with a band-dependent probability (the keeper must notice a stale read);
 * band unlocking: start with band 0; unlock the next band once the keeper wins >= 60% of the last ~2000 fights against
-  the NEWEST band; sample bands proportional to (1, 1, 1.5, 1.5) over the unlocked ones so old habits stay covered.
+  the NEWEST band; sample bands proportional to (1, 1, 1.5, 1.5) over the unlocked ones so old habits stay covered;
+* learning players (layout 3): ~35% of habit players learn which answers work against THIS keeper (learn_rate > 0) —
+  a keeper that leans on one counter teaches them to stop walking into it;
+* exploiters (RL-4): trained player networks registered by the league (train.py --league) join at exploit_fraction;
+* every session also fixes the KEEPER's side: its identity (uniform over the three) and skill (half the sessions at
+  full strength — the tier B0 grades — the rest uniform in [0, 1]), so one network learns every keeper and difficulty.
 
 Held-out players come from a separate seed stream (never the training stream), so evaluation meets players the keeper
 has not seen. Every spec carries a `tag` (echoed back by the C++ env in each step result) naming its source and band:
@@ -53,6 +58,11 @@ HABIT_RANGES = {
 }
 NOISE_RANGE = (0.0, 0.1)
 SKILL_RANGE = (0.2, 1.0)
+LEARNER_FRACTION = 0.35            # habit players that learn (FBotProfile::LearnRate > 0)
+LEARN_RATE_RANGE = (0.05, 0.4)
+LEARN_TEMP_RANGE = (0.2, 0.6)
+KEEPER_FULL_SKILL_P = 0.5          # sessions with the keeper at skill 1 (the rest: skill ~ U(0, 1))
+EXPLOIT_FRACTION = 0.12            # sessions against registered exploiters (once there are any)
 
 # ---- tags: which source a spec came from (echoed back per step by the C++ env) ---------------------------------------
 TAG_BAND = 0            # + band: procedural habit players, TRAINING stream
@@ -60,6 +70,7 @@ TAG_REF = 10            # + kind: reference bots, training stream
 TAG_HELDOUT_BAND = 20   # + band: procedural habit players, HELD-OUT stream
 TAG_HELDOUT_REF = 30    # + kind: reference bots in the evaluation sets
 TAG_FIXED = 40          # + index: named fixed sets ("habitual" = 40)
+TAG_EXPLOITER = 100     # + policy id: exploiter networks (kind 7)
 
 # Seed streams (SeedSequence spawn keys): the held-out stream never shares state with the training one.
 STREAM_TRAIN, STREAM_HELDOUT = 0, 1
@@ -76,6 +87,8 @@ def tag_group(tag: int) -> str:
 		return f"heldout{tag - TAG_HELDOUT_BAND}"
 	if TAG_HELDOUT_REF <= tag < TAG_HELDOUT_REF + hwcore.NUM_REFERENCE_KINDS:
 		return "eval_ref"
+	if tag >= TAG_EXPLOITER:
+		return "exploit"
 	return "fixed"
 
 
@@ -100,7 +113,7 @@ def band_of_tag(tag: int) -> int:
 	return -1
 
 
-GROUPS_TRAIN = tuple(f"band{b}" for b in range(NUM_BANDS)) + ("ref",)
+GROUPS_TRAIN = tuple(f"band{b}" for b in range(NUM_BANDS)) + ("ref", "exploit")
 
 
 def make_rng(seed: int, stream: int, *extra: int) -> np.random.Generator:
@@ -145,9 +158,18 @@ def sample_alpha(rng: np.random.Generator, band: int) -> float:
 	return float(np.exp(rng.uniform(np.log(lo), np.log(hi))))
 
 
+def keeper_side(rng: np.random.Generator, full_skill_p: float = KEEPER_FULL_SKILL_P) -> dict:
+	"""The keeper's side of a training session: identity uniform, skill 1 with full_skill_p, else U(0, 1)."""
+	identity = int(rng.integers(hwcore.NUM_KEEPERS))
+	skill = 1.0 if rng.random() < full_skill_p else float(rng.uniform(0.0, 1.0))
+	return {"keeper_skill": skill, "keeper_identity": identity}
+
+
 def habit_player(rng: np.random.Generator, band: int, *, tag: int, fights: Optional[int] = None,
-		switch: Optional[bool] = None, switch_after: Optional[int] = None, alpha: Optional[float] = None) -> HWRLPlayerSpec:
-	"""A procedural habit player (kind 6). switch None = with the band's probability; switch_after None = U{15..60}."""
+		switch: Optional[bool] = None, switch_after: Optional[int] = None, alpha: Optional[float] = None,
+		learner: Optional[bool] = None) -> HWRLPlayerSpec:
+	"""A procedural habit player (kind 6). switch None = with the band's probability; switch_after None = U{15..60};
+	learner None = with LEARNER_FRACTION (draws come after the table / timing draws, so the old streams are a prefix)."""
 	if not 0 <= band < NUM_BANDS:
 		raise ValueError(f"band {band}")
 	a = sample_alpha(rng, band) if alpha is None else float(alpha)
@@ -162,7 +184,7 @@ def habit_player(rng: np.random.Generator, band: int, *, tag: int, fights: Optio
 		after = -1
 	overrides = dict(zip(_HABIT_KEYS, rng.uniform(_HABIT_LOW, _HABIT_HIGH).tolist()))
 	overrides["chain_len"] = int(rng.integers(2, 4))
-	return make_spec(
+	spec = make_spec(
 		kind=hwcore.KIND_HABIT,
 		skill=float(rng.uniform(*SKILL_RANGE)),
 		fights_in_session=int(rng.integers(FIGHTS_RANGE[0], FIGHTS_RANGE[1] + 1)) if fights is None else int(fights),
@@ -173,6 +195,12 @@ def habit_player(rng: np.random.Generator, band: int, *, tag: int, fights: Optio
 		tag=tag,
 		**overrides,
 	)
+	if learner is None:
+		learner = bool(rng.random() < LEARNER_FRACTION)
+	if learner:
+		spec.learn_rate = float(rng.uniform(*LEARN_RATE_RANGE))
+		spec.learn_temp = float(rng.uniform(*LEARN_TEMP_RANGE))
+	return spec
 
 
 def reference_player(rng: np.random.Generator, *, kind: Optional[int] = None, skill: Optional[float] = None,
@@ -218,6 +246,12 @@ class Population:
 		self.sessions_sampled = 0
 		self.band_tag = TAG_HELDOUT_BAND if self.stream == STREAM_HELDOUT else TAG_BAND
 		self.ref_tag = TAG_HELDOUT_REF if self.stream == STREAM_HELDOUT else TAG_REF
+		# The keeper's side of each session (a separate stream: the player draws stay what they were) and the league.
+		self.keeper_rng = make_rng(seed, stream, 77)
+		self.vary_keeper = True
+		self.full_skill_p = KEEPER_FULL_SKILL_P
+		self.exploiters: List[dict] = []     # {"id": policy_id in the batch, "path": .hwrl, "weight": float, "round": int}
+		self.exploit_fraction = EXPLOIT_FRACTION
 
 	# -- sampling
 	def active_bands(self) -> List[int]:
@@ -228,8 +262,12 @@ class Population:
 		w = np.array([self.band_weights[b] for b in bands], np.float64)
 		return w / w.sum()
 
-	def sample(self) -> HWRLPlayerSpec:
-		self.sessions_sampled += 1
+	def _player(self) -> HWRLPlayerSpec:
+		if self.exploiters and self.keeper_rng.random() < self.exploit_fraction:
+			w = np.array([e["weight"] for e in self.exploiters], np.float64)
+			e = self.exploiters[min(int(np.searchsorted(np.cumsum(w / w.sum()), self.keeper_rng.random(), side="right")), len(w) - 1)]
+			return make_spec(kind=hwcore.KIND_POLICY, skill=0.5, policy_id=int(e["id"]), tag=TAG_EXPLOITER + int(e["id"]),
+				fights_in_session=int(self.keeper_rng.integers(1, 4)) if self.fights is None else int(self.fights))
 		if self.rng.random() < self.ref_fraction:
 			k = int(self.rng.integers(hwcore.NUM_REFERENCE_KINDS))
 			return reference_player(self.rng, kind=k, fights=self.fights, tag=self.ref_tag + k)
@@ -238,6 +276,19 @@ class Population:
 		j = min(int(np.searchsorted(cum, self.rng.random(), side="right")), len(bands) - 1)
 		band = int(bands[j])
 		return habit_player(self.rng, band, tag=self.band_tag + band, fights=self.fights)
+
+	def sample(self) -> HWRLPlayerSpec:
+		self.sessions_sampled += 1
+		spec = self._player()
+		if self.vary_keeper:
+			side = keeper_side(self.keeper_rng, self.full_skill_p)
+			spec.keeper_skill = side["keeper_skill"]
+			spec.keeper_identity = side["keeper_identity"]
+		return spec
+
+	def add_exploiter(self, policy_id: int, path: str, round_index: int, weight: float = 1.0) -> None:
+		"""The league registers an exploiter (its policy_id in the env batch): later rounds weigh more."""
+		self.exploiters.append({"id": int(policy_id), "path": str(path), "weight": float(weight), "round": int(round_index)})
 
 	# -- curriculum
 	def record_fight(self, tag: int, result: int) -> None:
@@ -259,7 +310,8 @@ class Population:
 	def describe(self) -> dict:
 		d = {"unlocked": self.unlocked, "newest_band": self.unlocked - 1,
 			"newest_window": len(self.newest_results),
-			"newest_win_rate": float(np.mean(self.newest_results)) if self.newest_results else 0.0}
+			"newest_win_rate": float(np.mean(self.newest_results)) if self.newest_results else 0.0,
+			"exploiters": len(self.exploiters)}
 		for b in range(NUM_BANDS):
 			w = self.band_windows[b]
 			d[f"band{b}_win_rate"] = float(np.mean(w)) if w else float("nan")
@@ -270,7 +322,9 @@ class Population:
 		return {"type": "Population", "seed": self.seed, "stream": self.stream, "rng": self.rng.bit_generator.state,
 			"unlocked": self.unlocked, "newest_results": list(self.newest_results),
 			"band_windows": {b: list(w) for b, w in self.band_windows.items()}, "unlock_log": list(self.unlock_log),
-			"fights_seen": self.fights_seen, "sessions_sampled": self.sessions_sampled}
+			"fights_seen": self.fights_seen, "sessions_sampled": self.sessions_sampled,
+			"keeper_rng": self.keeper_rng.bit_generator.state, "exploiters": list(self.exploiters),
+			"exploit_fraction": self.exploit_fraction}
 
 	def load_state_dict(self, s: dict) -> None:
 		self.rng.bit_generator.state = s["rng"]
@@ -281,6 +335,11 @@ class Population:
 		self.unlock_log = list(s.get("unlock_log", []))
 		self.fights_seen = int(s.get("fights_seen", 0))
 		self.sessions_sampled = int(s.get("sessions_sampled", 0))
+		if "keeper_rng" in s:
+			self.keeper_rng.bit_generator.state = s["keeper_rng"]
+		# Exploiter ids belong to the env batch that registered them: train.py re-registers the paths on resume.
+		self.exploiters = [dict(e) for e in s.get("exploiters", [])]
+		self.exploit_fraction = float(s.get("exploit_fraction", self.exploit_fraction))
 
 
 class FixedSet:
@@ -322,30 +381,43 @@ def habitual_set(fights: int = 1, skill: float = 0.8) -> FixedSet:
 
 
 def heldout_habit_players(n: int, band: int, seed: int = 0, *, fights: Optional[int] = None,
-		switch: Optional[bool] = None, switch_after: Optional[int] = None, variant: int = 0) -> List[HWRLPlayerSpec]:
+		switch: Optional[bool] = None, switch_after: Optional[int] = None, variant: int = 0, learner: bool = False,
+		identity: int = 0, keeper_skill: float = 1.0) -> List[HWRLPlayerSpec]:
 	"""n held-out habit players of one band (tags 20+band), from the held-out stream. The same (seed, band, variant)
-	always gives the same players, whatever n (player i is the i-th draw)."""
+	always gives the same players, whatever n (player i is the i-th draw). Fixed habits unless learner; the keeper
+	plays as `identity` at `keeper_skill`."""
 	rng = make_rng(seed, STREAM_HELDOUT, 1000 + band, variant)
-	return [habit_player(rng, band, tag=TAG_HELDOUT_BAND + band, fights=fights, switch=switch, switch_after=switch_after)
-		for _ in range(n)]
+	out = []
+	for _ in range(n):
+		sp = habit_player(rng, band, tag=TAG_HELDOUT_BAND + band, fights=fights, switch=switch, switch_after=switch_after,
+			learner=learner)
+		sp.keeper_identity = int(identity)
+		sp.keeper_skill = float(keeper_skill)
+		out.append(sp)
+	return out
 
 
 def reference_set(kinds: Sequence[int] = (hwcore.KIND_HABITUAL, hwcore.KIND_RHYTHM_PARRIER, hwcore.KIND_DODGER_LEFT,
 		hwcore.KIND_VARIED, hwcore.KIND_TURTLE), skills: Sequence[float] = (0.3, 0.5, 0.7, 0.9),
-		fights: int = 3) -> List[HWRLPlayerSpec]:
+		fights: int = 3, identity: int = 0, keeper_skill: float = 1.0) -> List[HWRLPlayerSpec]:
 	"""The B0 sweep's reference bots (tags 30+kind): every kind at every skill."""
-	return [make_spec(kind=k, skill=s, fights_in_session=fights, tag=TAG_HELDOUT_REF + k) for k in kinds for s in skills]
+	return [make_spec(kind=k, skill=s, fights_in_session=fights, tag=TAG_HELDOUT_REF + k, keeper_identity=identity,
+		keeper_skill=keeper_skill) for k in kinds for s in skills]
 
 
-def eval_sets(seed: int = 0, n: int = 16, fights: int = 3) -> Dict[str, List[HWRLPlayerSpec]]:
-	"""The evaluation sets of eval.py (held-out stream; identical for every arm and every run with the same seed)."""
+def eval_sets(seed: int = 0, n: int = 16, fights: int = 3, identity: int = 0, keeper_skill: float = 1.0) -> Dict[str, List[HWRLPlayerSpec]]:
+	"""The evaluation sets of eval.py (held-out stream; identical for every arm and every run with the same seed).
+	The keeper plays as `identity` at `keeper_skill` (the RL arm only; the script and classic arms ignore it)."""
+	kw = dict(fights=fights, identity=identity, keeper_skill=keeper_skill)
 	return {
-		"habit_low": heldout_habit_players(n, 0, seed, fights=fights, switch=False),        # strong habits: reading pays
-		"habit_mid": heldout_habit_players(n, 1, seed, fights=fights, switch=False),
-		"habit_high": heldout_habit_players(n, 3, seed, fights=fights, switch=False),       # near random: not-a-bully
-		"switch_low": heldout_habit_players(n, 0, seed, fights=fights, switch=True, switch_after=30, variant=1),
-		"reference": reference_set(fights=fights),
-		"masher": [make_spec(kind=hwcore.KIND_MASHER, skill=0.1, fights_in_session=1, tag=TAG_HELDOUT_REF + hwcore.KIND_MASHER)],
+		"habit_low": heldout_habit_players(n, 0, seed, switch=False, **kw),        # strong habits: reading pays
+		"habit_mid": heldout_habit_players(n, 1, seed, switch=False, **kw),
+		"habit_high": heldout_habit_players(n, 3, seed, switch=False, **kw),       # near random: not-a-bully
+		"switch_low": heldout_habit_players(n, 0, seed, switch=True, switch_after=30, variant=1, **kw),
+		"learners": heldout_habit_players(n, 0, seed, switch=False, variant=2, learner=True, **kw),  # players who adapt
+		"reference": reference_set(fights=fights, identity=identity, keeper_skill=keeper_skill),
+		"masher": [make_spec(kind=hwcore.KIND_MASHER, skill=0.1, fights_in_session=1, tag=TAG_HELDOUT_REF + hwcore.KIND_MASHER,
+			keeper_identity=identity, keeper_skill=keeper_skill)],
 	}
 
 

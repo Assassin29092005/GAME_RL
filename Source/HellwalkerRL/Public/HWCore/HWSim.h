@@ -23,6 +23,8 @@ namespace HW
 		float ArenaRadius = 1400.f;
 		float BodyRadius = 38.f;
 		float MinSeparation = 90.f;
+		/** Forward locomotion (Approach, DashIn) stops this close — here and in the Unreal boss's locomotion. */
+		static constexpr float ApproachStopDistance = 130.f;
 
 		void Reset(float StartDistance);
 		float Distance() const;
@@ -78,7 +80,51 @@ namespace HW
 		float    Habit[2][HabitClasses][HabitResponses] = {}; // [table A / B][class][response] weights (need not sum to 1)
 		float    HabitNoise = 0.f;    // P(a uniformly random response instead of the table)
 		bool     bAdapts = true;      // the reference bots' wariness (warier of feints once caught, dodges flip side)
+		// ---- Kind == Habit, learning players (RL.md §6 "players who adapt"): a value per (boss swing class, response),
+		// learned from what each response earned against THIS keeper (hit -1, blocked +0.25, dodged +1, parried +1.5),
+		// tilts the table: P(r) ~ table(r) * exp(Q(r) / LearnTemp). A keeper that leans on one counter teaches the player
+		// to stop walking into it — the cheap stand-in for a human noticing the boss's favourite move.
+		float    LearnRate = 0.f;     // 0 = a fixed habit; > 0 = learning (per answered swing)
+		float    LearnTemp = 0.35f;
 	};
+
+	/** What a learning player keeps across the fights of a session (the owner resets it per session). */
+	struct FBotMemory
+	{
+		float Q[FBotProfile::HabitClasses][FBotProfile::HabitResponses] = {};
+		int32_t Updates = 0;
+		void Reset() { *this = FBotMemory{}; }
+	};
+	/** What a simulated player saw and did, counted once per Act() (diagnostics for the Unreal-vs-simulator parity: the
+	 *  same bot runs in both, so these say where the two worlds put it differently). */
+	struct FBotDiag
+	{
+		int32_t Frames = 0;
+		int32_t Actionable = 0;          // it could commit a move
+		int32_t InRange = 0;             // within its attack range (185)
+		int32_t InRangeActionable = 0;
+		int32_t BossOpen = 0;            // a punish window: stagger, guard broken, hitstun, a long recovery
+		int32_t BossOpenInRange = 0;
+		int32_t BossSwinging = 0;        // a keeper swing in flight
+		int32_t DefencePending = 0;      // an answer planned and not yet executed
+		int32_t PunishStarts = 0;        // strings begun, by reason
+		int32_t AggroStarts = 0;
+		int32_t ResponseAttacks = 0;     // a keeper swing answered by swinging
+		int32_t AttackCommits = 0;       // attacks actually committed
+		int32_t WalkFwd = 0;
+		int32_t WalkBack = 0;
+		int32_t Guarding = 0;
+		float   DistanceSum = 0.f;
+		void Add(const FBotDiag& O)
+		{
+			Frames += O.Frames; Actionable += O.Actionable; InRange += O.InRange; InRangeActionable += O.InRangeActionable;
+			BossOpen += O.BossOpen; BossOpenInRange += O.BossOpenInRange; BossSwinging += O.BossSwinging;
+			DefencePending += O.DefencePending; PunishStarts += O.PunishStarts; AggroStarts += O.AggroStarts;
+			ResponseAttacks += O.ResponseAttacks; AttackCommits += O.AttackCommits; WalkFwd += O.WalkFwd; WalkBack += O.WalkBack;
+			Guarding += O.Guarding; DistanceSum += O.DistanceSum;
+		}
+	};
+
 	FBotProfile MakeBotProfile(EBotKind Kind, float Skill);
 	/** Habit class of a boss swing (its symbol): 0 BFast, 1 BHeavy, 2 BFeint, 3 BKiller; -1 not a boss attack. */
 	int32_t HabitClassOf(const FMoveData& M);
@@ -100,6 +146,14 @@ namespace HW
 		/** Habit players: which table answers (0 = A, 1 = B after a habit switch). The owner schedules switches. */
 		void SetHabitPhase(int32_t Phase) { HabitPhase = Phase > 0 ? 1 : 0; }
 		int32_t GetHabitPhase() const { return HabitPhase; }
+		/** The boss swing (its commit frame) the bot last planned an answer for, and the habit table it used (-1 = none). */
+		int32_t PlannedSwingFrame() const { return PlannedCommitFrame; }
+		int32_t PlannedHabitPhase() const { return PlannedPhase; }
+		/** Learning players: the session's memory (null = the bot's own, which lasts one fight). Set after Reset. */
+		void SetMemory(FBotMemory* InMemory) { Memory = InMemory; }
+		const FBotMemory& GetMemory() const { return Memory != nullptr ? *Memory : OwnMemory; }
+		/** Diagnostics since Reset (parity). */
+		const FBotDiag& Diag() const { return DiagC; }
 
 	private:
 		enum class EResp : uint8_t { None, Parry, Block, StepL, StepR, StepB, StepF, Attack };
@@ -125,6 +179,14 @@ namespace HW
 		float   Fwd = 0.f;
 		float   Lat = 0.f;
 		int32_t HabitPhase = 0;
+		// Learning players: the response planned for the boss swing committed at RespSwingFrame, and its class.
+		FBotMemory* Memory = nullptr;
+		FBotMemory OwnMemory;
+		int32_t RespSwingFrame = -1;
+		int32_t RespClass = -1;
+		int32_t RespColumn = -1;
+		int32_t PlannedPhase = -1;
+		FBotDiag DiagC;
 	};
 
 	struct FRunConfig
@@ -134,6 +196,8 @@ namespace HW
 		int32_t     MaxFrames = 90 * FramesPerSecond;
 		bool        bImmortal = false;
 		float       StartDistance = 650.f;
+		/** The keeper's health relative to the tuning (RL::KeeperHealthScale for the RL keepers); mortal runs only. */
+		float       BossHealthScale = 1.f;
 	};
 
 	/**

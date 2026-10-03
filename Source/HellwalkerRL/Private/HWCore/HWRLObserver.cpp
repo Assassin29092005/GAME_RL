@@ -26,6 +26,20 @@ namespace HW
 		}
 		inline float Length(float X, float Y) { return std::sqrt(X * X + Y * Y); }
 
+		/**
+		 * Health as the keeper sees it. Immortal fights (FEncounter's rate-measurement mode) give both fighters 1e9-point
+		 * pools; there the fraction is taken of a normal pool (RealMax) that refills at every would-be death, so the
+		 * inputs move as they do in the mortal fights it trained on instead of sitting at 1.0 all fight.
+		 */
+		inline float HealthFraction(float Health, float HealthMax, float RealMax)
+		{
+			if (HealthMax <= 0.f) { return 0.f; }
+			if (HealthMax < 1.0e8f || RealMax <= 0.f) { return Clip(Health / HealthMax, 0.f, 1.f); }
+			const float Lost = HealthMax - Health;
+			const float Into = std::fmod(Lost < 0.f ? 0.f : Lost, RealMax);
+			return Clip(1.f - Into / RealMax, 0.f, 1.f);
+		}
+
 		/** TokBoss for a boss move: its symbol, BFast -> 1 .. BRetreat -> 8. */
 		inline int8_t BossTokenOf(EMoveId M)
 		{
@@ -138,6 +152,17 @@ namespace HW
 		Session = InSession;
 		if (Session != nullptr) { Session->FightIndex = Session->FightsBegun++; }
 		bMirrorY = Geo.bMirrorY;
+		SkillP = RL::SkillParams(Config.Skill);
+		Target = RL::TargetSwingsPerMin(Config.TargetSwingsPerMin, SkillP.Skill);
+		Identity = Config.Identity >= 0 && Config.Identity < RL::NumKeepers ? Config.Identity : 0;
+		MinGap = Config.MinSwingGap > 0 ? Config.MinSwingGap : 0;
+		if (MinGap > 0)
+		{
+			// The breather caps the swing rate at 3600 / MinGap a minute. The swing-deficit input measures against 90% of
+			// that, so Easy's keeper is not told it is behind for the whole fight (an input training never showed it).
+			const float Allowed = 0.9f * 3600.f / static_cast<float>(MinGap);
+			Target = Target < Allowed ? Target : Allowed;
+		}
 
 		for (FSnap& S : Snaps) { S = FSnap{}; S.Frame = -1; }
 		FirstSnapFrame = Duel.Frame;
@@ -306,7 +331,7 @@ namespace HW
 		while (PendingCount > 0)
 		{
 			const FDuelEvent& E = PendingPlayerEvents[PendingHead];
-			if (E.Frame > Now - RL::PerceptionFrames - 1) { break; }
+			if (E.Frame > Now - SkillP.Perception - 1) { break; }
 			if (E.Type == EDuelEvent::Commit) { PerceivedPlayerCommitFrame = E.Frame; }
 			else { PerceivedPlayerOutcome = E.Outcome; }
 			PendingHead = (PendingHead + 1) % EventRing;
@@ -347,11 +372,11 @@ namespace HW
 		const int32_t D = Duel.Frame;
 		const FFighter& B = Duel.Get(ESide::Boss);
 		const FSnap L = SnapAt(LatestSnapFrame);                         // the keeper's latest recorded position
-		const FSnap P = SnapAt(D - RL::PerceptionFrames);                // the player, as seen
-		const FSnap P2 = SnapAt(D - RL::PerceptionFrames - 4);           // ... 4 frames earlier (velocities)
+		const FSnap P = SnapAt(D - SkillP.Perception);                   // the player, as seen
+		const FSnap P2 = SnapAt(D - SkillP.Perception - 4);              // ... 4 frames earlier (velocities)
 
 		// ---- SELF: current -------------------------------------------------------------------------------------------
-		O[RL::ObsSelfHealth] = B.HealthMax > 0.f ? Clip(B.Health / B.HealthMax, 0.f, 1.f) : 0.f;
+		O[RL::ObsSelfHealth] = RLObsImpl::HealthFraction(B.Health, B.HealthMax, Tuning().BossHealthMax * RL::KeeperHealthScale(Identity));
 		O[RL::ObsSelfShaChi] = B.ShaChiMax > 0.f ? Clip(B.ShaChi / B.ShaChiMax, 0.f, 1.f) : 0.f;
 		O[RL::ObsSelfState + static_cast<int32_t>(B.State)] = 1.f;
 		const bool bSelfAttacking = B.State == EFighterState::Acting && B.CurrentMove().IsAttack();
@@ -372,8 +397,8 @@ namespace HW
 		O[RL::ObsSelfSinceOutcome] = LastOwnOutcomeFrame < 0 ? 1.f : Clip(static_cast<float>(D - LastOwnOutcomeFrame) / 120.f, 0.f, 1.f);
 		O[RL::ObsSelfDefended] = Flag(bDefendedSinceDecision);
 		O[RL::ObsSelfString] = Clip(static_cast<float>(StringAttacks) / static_cast<float>(RL::MaxStringAttacks), 0.f, 1.f);
-		O[RL::ObsSelfGrabCooldown] = Clip(static_cast<float>(RL::GrabCooldownFrames - (D - LastGrabFrame)) / static_cast<float>(RL::GrabCooldownFrames), 0.f, 1.f);
-		O[RL::ObsSelfKillerCooldown] = Clip(static_cast<float>(RL::KillerCooldownFrames - (D - LastKillerFrame)) / static_cast<float>(RL::KillerCooldownFrames), 0.f, 1.f);
+		O[RL::ObsSelfGrabCooldown] = Clip(static_cast<float>(SkillP.GrabCooldown - (D - LastGrabFrame)) / static_cast<float>(SkillP.GrabCooldown), 0.f, 1.f);
+		O[RL::ObsSelfKillerCooldown] = Clip(static_cast<float>(SkillP.KillerCooldown - (D - LastKillerFrame)) / static_cast<float>(SkillP.KillerCooldown), 0.f, 1.f);
 		O[RL::ObsSelfChainWindow] = Flag(RLObsImpl::InChainWindow(B));
 
 		// ---- PLAYER: PerceptionFrames late ---------------------------------------------------------------------------
@@ -417,7 +442,7 @@ namespace HW
 			O[RL::ObsPlayerBearingSin] = Sin;
 			O[RL::ObsPlayerBearingCos] = Cos;
 		}
-		O[RL::ObsPlayerHealth] = Clip(P.Health / P.HealthMax, 0.f, 1.f);
+		O[RL::ObsPlayerHealth] = RLObsImpl::HealthFraction(P.Health, P.HealthMax, Tuning().PlayerHealthMax);
 		O[RL::ObsPlayerShaChi] = Clip(P.ShaChi / P.ShaChiMax, 0.f, 1.f);
 		O[RL::ObsPlayerState + static_cast<int32_t>(P.State)] = 1.f;
 		if (P.State == EFighterState::Acting && P.Move != EMoveId::None)
@@ -429,8 +454,8 @@ namespace HW
 			const int32_t Total = M.TotalFrames();
 			O[RL::ObsPlayerProgress] = Total > 0 ? Clip(static_cast<float>(P.T) / static_cast<float>(Total), 0.f, 1.f) : 0.f;
 		}
-		// What it saw is PerceptionFrames old, so the player is that much closer to acting than the snapshot says.
-		const int32_t PlayerUntil = P.UntilActionable - RL::PerceptionFrames > 0 ? P.UntilActionable - RL::PerceptionFrames : 0;
+		// What it saw is the perception delay old, so the player is that much closer to acting than the snapshot says.
+		const int32_t PlayerUntil = P.UntilActionable - SkillP.Perception > 0 ? P.UntilActionable - SkillP.Perception : 0;
 		O[RL::ObsPlayerUntilActionable] = Clip(static_cast<float>(PlayerUntil) / 60.f, 0.f, 2.f);
 		O[RL::ObsPlayerGuardHeld] = Flag(P.bGuardHeld);
 		O[RL::ObsPlayerGuarding] = Flag(P.bGuarding);
@@ -446,8 +471,12 @@ namespace HW
 		O[RL::ObsFrameAdvantage] = Clip(static_cast<float>(PlayerUntil - B.FramesUntilActionable()) / 30.f, -2.f, 2.f);
 		O[RL::ObsFightTime] = Clip(static_cast<float>(D) / 60.f / 180.f, 0.f, 1.f);
 		O[RL::ObsFightIndex] = Session != nullptr ? Clip(static_cast<float>(Session->FightIndex) / 3.f, 0.f, 1.f) : 0.f;
-		O[RL::ObsSwingDeficit] = Clip((Config.TargetSwingsPerMin - SwingsPerMinute(D)) / 60.f, -1.f, 1.f);
+		O[RL::ObsSwingDeficit] = Clip((Target - SwingsPerMinute(D)) / 60.f, -1.f, 1.f);
 		O[RL::ObsSinceOwnSwing] = Clip(static_cast<float>(D - LastOwnSwingFrame) / 300.f, 0.f, 1.f);
+
+		// ---- KEEPER --------------------------------------------------------------------------------------------------
+		O[RL::ObsSkill] = SkillP.Skill;
+		O[RL::ObsIdentity + Identity] = 1.f;
 
 		if (OutTokens != nullptr)
 		{
@@ -472,7 +501,7 @@ namespace HW
 		const int32_t Floor = bChain ? ChainStartupFloor(B.CurrentMove().Symbol) : 0;
 		// Reach is judged on what it SEES: its latest position to the perceived player.
 		const FSnap L = SnapAt(LatestSnapFrame);
-		const FSnap P = SnapAt(D - RL::PerceptionFrames);
+		const FSnap P = SnapAt(D - SkillP.Perception);
 		const float Dist = RLObsImpl::Length(P.PX - L.BX, P.PY - L.BY);
 		for (int32_t A = 0; A < RL::NumBossMoves; ++A)
 		{
@@ -482,10 +511,11 @@ namespace HW
 			if (bOk && M.IsAttack())
 			{
 				bOk = Dist <= M.Range + RL::ReachSlack;
-				if (bOk && bChain) { bOk = StringAttacks < RL::MaxStringAttacks && M.Startup >= Floor; }
+				if (bOk && bChain) { bOk = StringAttacks < SkillP.MaxString && M.Startup >= Floor; }
+				if (bOk && !bChain && MinGap > 0) { bOk = D - LastOwnSwingFrame >= MinGap; } // Easy: a breather between strings
 			}
-			if (bOk && Id == EMoveId::BGrab) { bOk = D - LastGrabFrame >= RL::GrabCooldownFrames; }
-			if (bOk && Id == EMoveId::BKillerThrust) { bOk = D - LastKillerFrame >= RL::KillerCooldownFrames; }
+			if (bOk && Id == EMoveId::BGrab) { bOk = D - LastGrabFrame >= SkillP.GrabCooldown; }
+			if (bOk && Id == EMoveId::BKillerThrust) { bOk = D - LastKillerFrame >= SkillP.KillerCooldown; }
 			OutMask[A] = bOk ? 1 : 0;
 		}
 		OutMask[RL::ActionWait] = 1;
@@ -589,7 +619,7 @@ namespace HW
 		LastDecision = D;
 		LastActionIndex = A;
 		++Decisions;
-		NextDecisionFrame = D + RL::DecisionGapFrames;
+		NextDecisionFrame = D + SkillP.DecisionGap;
 		return Committed;
 	}
 
@@ -640,7 +670,7 @@ namespace HW
 		while (N < NumOpen)
 		{
 			const FOpenToken& T = Open[N];
-			const bool bReady = bAll || (T.CloseFrame >= 0 && T.CloseFrame + RL::PerceptionFrames <= Now);
+			const bool bReady = bAll || (T.CloseFrame >= 0 && T.CloseFrame + SkillP.Perception <= Now);
 			if (!bReady) { break; }
 			if (Session != nullptr)
 			{

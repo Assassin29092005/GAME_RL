@@ -45,17 +45,20 @@ def _align(x: int, a: int = 64) -> int:
 # =====================================================================================================================
 
 class Staging:
-	"""obs f32 [n,103] | tokens i8 [n,32,6] | mask u8 [n,23] | starts u8 [n], each region 64-byte aligned in one flat
-	uint8 buffer. `tensor` is the torch view (pinned when requested and possible); obs/tokens/mask/starts are numpy
-	views into the same memory (what the DLL writes)."""
+	"""obs f32 [n,O] | tokens i8 [n,K,F] | mask u8 [n,A] | starts u8 [n], each region 64-byte aligned in one flat
+	uint8 buffer (the keeper: O 107, K 32, F 6, A 23; an exploiter: O 99, K = F = 0, A 14). `tensor` is the torch view
+	(pinned when requested and possible); obs/tokens/mask/starts are numpy views into the same memory (what the DLL
+	writes)."""
 
-	def __init__(self, n: int, pin_memory: bool = False):
+	def __init__(self, n: int, pin_memory: bool = False, obs_dim: int = OBS_DIM, history_tokens: int = HISTORY_TOKENS,
+			token_fields: int = TOKEN_FIELDS, num_actions: int = NUM_ACTIONS):
 		self.n = n
-		self.off_obs, self.nb_obs = 0, n * OBS_DIM * 4
+		self.obs_dim, self.K, self.F, self.A = int(obs_dim), int(history_tokens), int(token_fields), int(num_actions)
+		self.off_obs, self.nb_obs = 0, n * self.obs_dim * 4
 		self.off_tok = _align(self.off_obs + self.nb_obs)
-		self.nb_tok = n * HISTORY_TOKENS * TOKEN_FIELDS
+		self.nb_tok = n * self.K * self.F
 		self.off_mask = _align(self.off_tok + self.nb_tok)
-		self.nb_mask = n * NUM_ACTIONS
+		self.nb_mask = n * self.A
 		self.off_start = _align(self.off_mask + self.nb_mask)
 		self.nb_start = n
 		self.nbytes = _align(self.off_start + self.nb_start)
@@ -69,18 +72,18 @@ class Staging:
 		else:
 			buf = np.zeros(self.nbytes, np.uint8)
 		self.buf = buf
-		self.obs = buf[self.off_obs:self.off_obs + self.nb_obs].view(np.float32).reshape(n, OBS_DIM)
-		self.tokens = buf[self.off_tok:self.off_tok + self.nb_tok].view(np.int8).reshape(n, HISTORY_TOKENS, TOKEN_FIELDS)
-		self.mask = buf[self.off_mask:self.off_mask + self.nb_mask].reshape(n, NUM_ACTIONS)
+		self.obs = buf[self.off_obs:self.off_obs + self.nb_obs].view(np.float32).reshape(n, self.obs_dim)
+		self.tokens = buf[self.off_tok:self.off_tok + self.nb_tok].view(np.int8).reshape(n, self.K, self.F)
+		self.mask = buf[self.off_mask:self.off_mask + self.nb_mask].reshape(n, self.A)
 		self.starts = buf[self.off_start:self.off_start + self.nb_start]
 
 	def unpack(self, t):
 		"""Views (obs f32 [n,O], tokens i8 [n,K,F], mask bool [n,A], starts bool [n]) of a uint8 torch tensor with
 		this layout — typically the device copy of `tensor`."""
 		n = self.n
-		obs = t[self.off_obs:self.off_obs + self.nb_obs].view(torch.float32).view(n, OBS_DIM)
-		tok = t[self.off_tok:self.off_tok + self.nb_tok].view(torch.int8).view(n, HISTORY_TOKENS, TOKEN_FIELDS)
-		mask = t[self.off_mask:self.off_mask + self.nb_mask].view(torch.bool).view(n, NUM_ACTIONS)
+		obs = t[self.off_obs:self.off_obs + self.nb_obs].view(torch.float32).view(n, self.obs_dim)
+		tok = t[self.off_tok:self.off_tok + self.nb_tok].view(torch.int8).view(n, self.K, self.F)
+		mask = t[self.off_mask:self.off_mask + self.nb_mask].view(torch.bool).view(n, self.A)
 		starts = t[self.off_start:self.off_start + self.nb_start].view(torch.bool)
 		return obs, tok, mask, starts
 
@@ -346,6 +349,14 @@ class HellwalkerVecEnv:
 		self.fight_swings = np.zeros(n, np.int64)
 		self.fight_dealt = np.zeros(n, np.float64)
 		self.fight_taken = np.zeros(n, np.float64)
+		# Per keeper identity, since the last pop_stats(): frames, swings, style events, READ counters (personalities).
+		self.id_frames = np.zeros(hwcore.NUM_KEEPERS, np.float64)
+		self.id_swings = np.zeros(hwcore.NUM_KEEPERS, np.float64)
+		self.id_reads = np.zeros(hwcore.NUM_KEEPERS, np.float64)
+		self.id_style = np.zeros((hwcore.NUM_KEEPERS, 4), np.float64)
+		self.id_style_reward = np.zeros(hwcore.NUM_KEEPERS, np.float64)
+		self.id_moves = np.zeros((hwcore.NUM_KEEPERS, NUM_ACTIONS), np.float64)
+		self.last_actions = None
 		# Interval counters (per decision) since the last pop_stats().
 		self.int_decisions = 0
 		self.int_cost = 0.0
@@ -390,6 +401,7 @@ class HellwalkerVecEnv:
 		"""-> obs (dict of staging views), reward f32 [n], cost f32 [n], session_done bool [n], fight_done bool [n], info
 		(result, aux_label, frames, swings, dmg_dealt, dmg_taken, tag, fight_index, habit_phase, read_counter; copies)."""
 		out = self.batch.step(actions, aux_top, aux_top_p)
+		self.last_actions = np.asarray(actions).reshape(self.num_envs)
 		reward = out.reward.copy()
 		cost = out.cost.copy()
 		session_done = out.session_done.astype(bool)
@@ -398,9 +410,17 @@ class HellwalkerVecEnv:
 			"result": out.result.copy(), "aux_label": out.aux_label.copy(), "frames": out.frames.copy(),
 			"swings": out.swings.copy(), "dmg_dealt": out.dmg_dealt.copy(), "dmg_taken": out.dmg_taken.copy(),
 			"tag": out.tag.copy(), "fight_index": out.fight_index.copy(), "habit_phase": out.habit_phase.copy(),
-			"read_counter": out.read_counter.astype(bool),
+			"read_counter": out.read_counter.astype(bool), "identity": out.identity.copy(), "skill": out.skill.copy(),
+			"style": out.style.copy(), "style_events": out.style_events.copy(), "hits": out.hits.copy(),
 		}
 		info["dmg"] = info["dmg_dealt"] - info["dmg_taken"]
+		ident = np.clip(info["identity"], 0, hwcore.NUM_KEEPERS - 1)
+		np.add.at(self.id_frames, ident, info["frames"])
+		np.add.at(self.id_swings, ident, info["swings"])
+		np.add.at(self.id_reads, ident, info["read_counter"])
+		np.add.at(self.id_style, ident, info["style_events"])
+		np.add.at(self.id_style_reward, ident, info["style"])
+		np.add.at(self.id_moves, (ident, np.clip(self.last_actions, 0, NUM_ACTIONS - 1)), 1.0)
 
 		# Fight bookkeeping (per group of the player the finished fight was against).
 		self.fight_reward += reward
@@ -446,8 +466,28 @@ class HellwalkerVecEnv:
 		groups = self.stats.pop()
 		d = max(self.int_decisions, 1)
 		minutes = max(self.int_frames, 1) / 3600.0
+		keepers = {}
+		for k, name in enumerate(hwcore.KEEPER_NAMES):
+			mins = max(self.id_frames[k], 1.0) / 3600.0
+			moves = self.id_moves[k]
+			attacks = moves[:hwcore.NUM_ATTACK_ACTIONS].sum()
+			kd = {"swings_per_min": self.id_swings[k] / mins, "reads_per_min": self.id_reads[k] / mins,
+				"style_reward_per_min": self.id_style_reward[k] / mins,
+				"feint_share": float(moves[9:12].sum() / max(attacks, 1.0)),
+				"heavy_share": float(moves[5:9].sum() / max(attacks, 1.0)),
+				"evade_share": float(moves[16:19].sum() / max(moves.sum(), 1.0))}
+			for i, ev in enumerate(hwcore.STYLE_EVENTS):
+				kd[f"{ev}_per_min"] = self.id_style[k, i] / mins
+			keepers[name] = kd
+		self.id_frames[:] = 0
+		self.id_swings[:] = 0
+		self.id_reads[:] = 0
+		self.id_style[:] = 0
+		self.id_style_reward[:] = 0
+		self.id_moves[:] = 0
 		out = {
 			"groups": groups,
+			"keepers": keepers,
 			"decisions": self.int_decisions,
 			"cost_per_decision": self.int_cost / d,
 			"swings_per_min": self.int_swings / minutes,
@@ -473,6 +513,103 @@ class HellwalkerVecEnv:
 
 	def __exit__(self, *exc):
 		self.close()
+
+
+# =====================================================================================================================
+# RL-4: the exploiter's vector env (the player decides; the keeper is frozen in C++)
+# =====================================================================================================================
+
+class KeeperSampler:
+	"""Which keeper an exploiter meets each session: full strength (skill 1 — the deployed tier), every identity."""
+
+	def __init__(self, seed: int = 0, skill: float = 1.0, fights=(1, 3)):
+		self.rng = np.random.default_rng(seed)
+		self.skill = float(skill)
+		self.fights = fights
+
+	def sample(self):
+		return (self.skill, int(self.rng.integers(hwcore.NUM_KEEPERS)), int(self.rng.integers(self.fights[0], self.fights[1] + 1)))
+
+
+class PlayerVecEnv:
+	"""num_envs exploiter-vs-frozen-keeper fights with the HellwalkerVecEnv interface the PPO trainer uses (staging,
+	reset(), step() -> obs, reward, cost, session_done, fight_done, info; pop_stats()). Rewards are the PLAYER's."""
+
+	def __init__(self, num_envs: int, boss: "hwcore.Policy", seed: int = 0, config=None, pin_memory: bool = False,
+			keepers: Optional[KeeperSampler] = None):
+		self.num_envs = n = int(num_envs)
+		self.backend = "dll"
+		self.batch = hwcore.PlayerBatch(n, boss, seed, config)
+		self.keepers = keepers or KeeperSampler(seed)
+		self.staging = Staging(n, pin_memory, obs_dim=hwcore.PLAYER_OBS_DIM, history_tokens=0, token_fields=0,
+			num_actions=hwcore.PLAYER_NUM_ACTIONS)
+		self.fight_reward = np.zeros(n, np.float64)
+		self._reset_interval()
+
+	def _reset_interval(self):
+		self.fights = self.wins = self.losses = self.timeouts = 0
+		self.rewards = 0.0
+		self.dealt = self.taken = 0.0
+		self.frames = 0
+		self.int_decisions = 0
+
+	def _assign(self, i: int):
+		skill, ident, fights = self.keepers.sample()
+		self.batch.set_next_keeper(i, skill, ident, fights)
+
+	def reset(self):
+		for i in range(self.num_envs):
+			self._assign(i)
+		self.batch.reset()
+		for i in range(self.num_envs):
+			self._assign(i)
+		st = self.staging
+		self.batch.observe(st.obs, st.mask)
+		st.starts[:] = 1
+		return {"obs": st.obs, "tokens": st.tokens, "mask": st.mask.view(np.bool_), "starts": st.starts.view(np.bool_)}
+
+	def step(self, actions, aux_top=None, aux_top_p=None):
+		out = self.batch.step(actions)
+		reward = out.reward.copy()
+		session_done = out.session_done.astype(bool)
+		fight_done = out.fight_done.astype(bool)
+		info = {"result": out.result.copy(), "aux_label": np.full(self.num_envs, -1, np.int8), "frames": out.frames.copy(),
+			"swings": out.swings.copy(), "hits": out.hits.copy(), "dmg_dealt": out.dmg_dealt.copy(),
+			"dmg_taken": out.dmg_taken.copy(), "identity": out.identity.copy()}
+		self.fight_reward += reward
+		for i in np.flatnonzero(fight_done):
+			res = int(info["result"][i])
+			self.fights += 1
+			self.wins += res == hwcore.RESULT_KEEPER_DIED      # the PLAYER won
+			self.losses += res == hwcore.RESULT_KEEPER_WON
+			self.timeouts += res == hwcore.RESULT_TIMEOUT
+			self.rewards += float(self.fight_reward[i])
+			self.fight_reward[i] = 0.0
+		for i in np.flatnonzero(session_done):
+			self._assign(int(i))
+		self.dealt += float(info["dmg_dealt"].sum())
+		self.taken += float(info["dmg_taken"].sum())
+		self.frames += int(info["frames"].sum())
+		self.int_decisions += self.num_envs
+		st = self.staging
+		self.batch.observe(st.obs, st.mask)
+		st.starts[:] = out.session_done
+		obs = {"obs": st.obs, "tokens": st.tokens, "mask": st.mask.view(np.bool_), "starts": st.starts.view(np.bool_)}
+		return obs, reward, np.zeros(self.num_envs, np.float32), session_done, fight_done, info
+
+	def pop_stats(self):
+		f = max(self.fights, 1)
+		mins = max(self.frames, 1) / 3600.0
+		d = {"fights": self.fights, "player_win_rate": self.wins / f, "player_loss_rate": self.losses / f,
+			"timeout_rate": self.timeouts / f, "reward_per_fight": self.rewards / f, "dealt_per_min": self.dealt / mins,
+			"taken_per_min": self.taken / mins, "decisions": self.int_decisions}
+		self._reset_interval()
+		return d
+
+	def close(self):
+		if self.batch is not None:
+			self.batch.destroy()
+			self.batch = None
 
 
 def make_env(num_envs: int, players, seed: int = 0, backend: str = "auto", config=None, pin_memory: bool = False,

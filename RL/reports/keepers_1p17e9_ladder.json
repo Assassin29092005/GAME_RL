@@ -1,0 +1,80 @@
+{
+  "name": "keepers_1p17e9_ladder",
+  "date": "2026-10-03 08:39:51",
+  "ckpt": null,
+  "hwrl": "RL/checkpoints/rl2_keepers/keeper_1p17e9.hwrl",
+  "seed": 12345,
+  "ladder": {
+    "rows": [
+      {
+        "skill": 0.0,
+        "temperature": 1.0,
+        "swing_gap": 84,
+        "swing_gap_wanted": 84,
+        "arm": "RL",
+        "keeper_win_rate": 0.9903846153846154,
+        "player_win_rate": 0.009615384615384616,
+        "dmg_per_min": 536.7016584287825,
+        "taken_per_min": 274.62248950191355,
+        "swings_per_min": 37.88876613817912,
+        "fight_seconds": 42.08168381911058
+      },
+      {
+        "skill": 0.4,
+        "temperature": 0.6,
+        "swing_gap": 0,
+        "swing_gap_wanted": 0,
+        "arm": "RL",
+        "keeper_win_rate": 1.0,
+        "player_win_rate": 0.0,
+        "dmg_per_min": 1193.984672420856,
+        "taken_per_min": 166.4247942016217,
+        "swings_per_min": 65.1291242530224,
+        "fight_seconds": 19.006621531951122
+      },
+      {
+        "skill": 0.75,
+        "temperature": 0.0,
+        "swing_gap": 0,
+        "swing_gap_wanted": 0,
+        "arm": "RL",
+        "keeper_win_rate": 0.9967948717948718,
+        "player_win_rate": 0.003205128205128205,
+        "dmg_per_min": 1316.0100713445634,
+        "taken_per_min": 139.90185074102556,
+        "swings_per_min": 72.38791102543343,
+        "fight_seconds": 17.321209247295673
+      },
+      {
+        "skill": 1.0,
+        "temperature": 0.0,
+        "swing_gap": 0,
+        "swing_gap_wanted": 0,
+        "arm": "RL",
+        "keeper_win_rate": 0.9935897435897436,
+        "player_win_rate": 0.00641025641025641,
+        "dmg_per_min": 1332.7873982580588,
+        "taken_per_min": 152.66238161979632,
+        "swings_per_min": 74.63167442873457,
+        "fight_seconds": 17.00144293369391
+      },
+      {
+        "skill": null,
+        "temperature": null,
+        "swing_gap": 0,
+        "swing_gap_wanted": 0,
+        "arm": "script",
+        "keeper_win_rate": 0.9935897435897436,
+        "player_win_rate": 0.00641025641025641,
+        "dmg_per_min": 718.7503616338887,
+        "taken_per_min": 390.92564546701254,
+        "swings_per_min": 64.22283562054973,
+        "fight_seconds": 31.23439691005609
+      }
+    ],
+    "checks": {
+      "monotone_damage": true,
+      "easy_below_script": true
+    }
+  }
+}

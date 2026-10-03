@@ -84,10 +84,12 @@ def parse_thesis_output(text: str) -> dict:
 	return out
 
 
-def run_b0(hwrl: str, sessions: int = 4, script: int = 0, exe: Path = THESIS_EXE, timeout: int = 7200) -> dict:
+def run_b0(hwrl: str, sessions: int = 4, script: int = 0, exe: Path = THESIS_EXE, timeout: int = 7200,
+		identity: int = -1, skill: float = 1.0) -> dict:
 	if not exe.exists():
 		return {"skipped": f"{exe} not found (build it with Sim\\build.bat)"}
-	cmd = [str(exe), "--brain", "rl", "--policy", str(hwrl), "--sessions", str(sessions), "--script", str(script)]
+	cmd = [str(exe), "--brain", "rl", "--policy", str(hwrl), "--sessions", str(sessions), "--script", str(script),
+		"--skill", str(skill)] + (["--identity", str(identity)] if identity >= 0 else [])
 	t0 = time.time()
 	try:
 		p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
@@ -158,8 +160,8 @@ def run_curve_set(engine, specs: List, n_sessions: int, seed: int, backend: str,
 		max_steps: int = 40000, max_envs: int = 256) -> dict:
 	"""Play complete sessions against `specs` (cycled) and record every keeper attack of each session: its index k in
 	the session (fights of a session continue the count — the memory carries), whether it hit, and the habit table the
-	player was answering with. An attack "hit" when the keeper dealt damage in the step it was committed in or in a
-	later step before its next attack (same fight)."""
+	player was answering with. An attack "hit" when a CLEAN hit (EHitOutcome::Hit — blocked chip damage is not one;
+	review finding) landed in the step it was committed in or in a later step before its next attack (same fight)."""
 	import env as env_mod
 	n_env = int(max(1, min(len(specs) * 4, n_sessions, max_envs)))
 	source = players_mod.FixedSet(specs, "curve")
@@ -188,7 +190,7 @@ def run_curve_set(engine, specs: List, n_sessions: int, seed: int, backend: str,
 		decisions += n_env
 		reads += int(info["read_counter"].sum())
 		sw = info["swings"] > 0
-		dealt = info["dmg_dealt"] > 0
+		dealt = info["hits"] > 0
 		for i in np.flatnonzero(sw | dealt | fd):
 			if sw[i]:
 				finalize(i)
@@ -255,17 +257,18 @@ def run_curve_set(engine, specs: List, n_sessions: int, seed: int, backend: str,
 
 
 def run_curve(engine, seed: int, backend: str, n_sessions: int = 128, fights: int = 2, switch_after: int = 30,
-		n_players: int = 64, target_spm: float = 66.0) -> dict:
+		n_players: int = 64, target_spm: float = 66.0, identity: int = 0, keeper_skill: float = 1.0) -> dict:
 	# Immortal fights of a fixed length (as B0 measures rates): a mortal fight ends when the player dies, so the late
 	# part of the curve would only count the players who survived longest (survivorship bias).
 	cfg = hwcore.env_config(target_spm=target_spm, immortal=True, max_fight_seconds=60)
+	kw = dict(fights=fights, identity=identity, keeper_skill=keeper_skill)
 	sets = {
-		"low_alpha": players_mod.heldout_habit_players(n_players, 0, seed, fights=fights, switch=False, variant=11),
-		"high_alpha": players_mod.heldout_habit_players(n_players, 3, seed, fights=fights, switch=False, variant=12),
-		"switch_low_alpha": players_mod.heldout_habit_players(n_players, 0, seed, fights=fights, switch=True,
-			switch_after=switch_after, variant=13),
-		"switch_high_alpha": players_mod.heldout_habit_players(n_players, 3, seed, fights=fights, switch=True,
-			switch_after=switch_after, variant=14),
+		"low_alpha": players_mod.heldout_habit_players(n_players, 0, seed, switch=False, variant=11, **kw),
+		"high_alpha": players_mod.heldout_habit_players(n_players, 3, seed, switch=False, variant=12, **kw),
+		"switch_low_alpha": players_mod.heldout_habit_players(n_players, 0, seed, switch=True, switch_after=switch_after,
+			variant=13, **kw),
+		"switch_high_alpha": players_mod.heldout_habit_players(n_players, 3, seed, switch=True, switch_after=switch_after,
+			variant=14, **kw),
 	}
 	out = {"config": {"n_sessions": n_sessions, "fights": fights, "switch_after": switch_after, "players": n_players,
 		"backend": backend}}
@@ -293,13 +296,14 @@ def run_curve(engine, seed: int, backend: str, n_sessions: int = 128, fights: in
 # =====================================================================================================================
 
 def run_arms(policy: Optional["hwcore.Policy"], seed: int, n_players: int = 16, sessions: int = 2, fights: int = 3,
-		fight_seconds: int = 90, script_index: int = 0, bully_tolerance: float = 0.15) -> dict:
+		fight_seconds: int = 90, script_index: int = 0, bully_tolerance: float = 0.15, identity: int = 0,
+		keeper_skill: float = 1.0) -> dict:
 	if not hwcore.available():
 		return {"skipped": "hwrl.dll not available (build it with RL\\native\\build.bat)"}
-	sets = players_mod.eval_sets(seed=seed, n=n_players, fights=fights)
+	sets = players_mod.eval_sets(seed=seed, n=n_players, fights=fights, identity=identity, keeper_skill=keeper_skill)
 	arms = [hwcore.ARM_SCRIPT, hwcore.ARM_CLASSIC] + ([hwcore.ARM_RL] if policy is not None else [])
 	out: dict = {"config": {"players": n_players, "sessions": sessions, "fights": fights, "fight_seconds": fight_seconds,
-		"script_index": script_index, "seed": seed}, "sets": {}}
+		"script_index": script_index, "seed": seed, "identity": identity, "keeper_skill": keeper_skill}, "sets": {}}
 	for name, specs in sets.items():
 		lethal = name == "masher"
 		res = {}
@@ -339,8 +343,92 @@ def run_arms(policy: Optional["hwcore.Policy"], seed: int, n_players: int = 16, 
 		for n in ("habit_low", "habit_high", "reference")))
 	checks["net_exchange"] = bool(all(exchange(n, R) >= 0.95 * exchange(n, S) for n in ("habit_low", "habit_high", "reference")))
 	checks["masher_lethal"] = bool(out["sets"]["masher"][R]["keeper_win_rate"] >= 1.0)
+	# Players who adapt to the keeper (learning habit players): its edge over the script should survive them.
+	checks["rl_vs_script_dmg_learners"] = ratio("learners", R, S)
 	out["checks"] = checks
 	return out
+
+
+# =====================================================================================================================
+# (4) The keepers (personalities) and the difficulty ladder
+# =====================================================================================================================
+
+MOVE_GROUPS = {"feints": (9, 10, 11), "heavies": (5, 6, 7, 8), "sweeps": (1, 2, 3, 4, 7, 8), "grab_killer": (12, 13),
+	"evades": (16, 17, 18), "guard": (14, 15)}
+
+
+def run_keepers(policy: "hwcore.Policy", seed: int, n_players: int = 16, sessions: int = 2, fights: int = 3,
+		fight_seconds: int = 90) -> dict:
+	"""The same network as each keeper (identity input) on the same held-out players: its style (move shares, style
+	events per minute) and strength. The personalities should differ visibly: the Warden breaks guards, the Sage baits
+	and evades, the Returned reads (READ counters)."""
+	out = {}
+	for ident, name in enumerate(hwcore.KEEPER_NAMES):
+		sets = players_mod.eval_sets(seed=seed, n=n_players, fights=fights, identity=ident)
+		runs = []
+		for set_name in ("habit_low", "habit_mid", "reference"):
+			for i, sp in enumerate(sets[set_name]):
+				runs.append(hwcore.eval_sessions(hwcore.ARM_RL, sp, sessions, seed * 7919 + 101 * i + 7 + 31 * len(runs), policy=policy,
+					immortal=True, fight_seconds=fight_seconds))
+		d = hwcore.sum_eval_stats(runs)
+		moves = np.array(d["boss_moves"], np.float64)
+		attacks = max(moves[:hwcore.NUM_ATTACK_ACTIONS].sum(), 1.0)
+		shares = {g: float(moves[list(idx)].sum() / (attacks if g not in ("evades", "guard") else max(moves.sum(), 1.0)))
+			for g, idx in MOVE_GROUPS.items()}
+		out[name] = {"dmg_per_min": d["dmg_per_min"], "taken_per_min": d["boss_dmg_per_min"], "swings_per_min": d["swings_per_min"],
+			"hit_rate": d["hit_rate"], "reads_per_min": d["read_counters_per_min"], "mean_distance": d["mean_distance"],
+			**{f"share_{g}": v for g, v in shares.items()},
+			**{f"{e}_per_min": d[f"{e}_per_min"] for e in hwcore.STYLE_EVENTS}}
+		print(f"[eval] keeper {name}: {d['dmg_per_min']:.0f} dmg/min, feints {shares['feints']:.2f}, heavies {shares['heavies']:.2f}, "
+			f"evades {shares['evades']:.2f}, guard breaks/min {d['guard_breaks_per_min']:.2f}, bites/min {d['feint_bites_per_min']:.2f}, "
+			f"reads/min {d['read_counters_per_min']:.2f}", flush=True)
+	w, sg, r = out["Warden"], out["Sage"], out["Returned"]
+	out["checks"] = {
+		"warden_breaks_most_guards": bool(w["guard_breaks_per_min"] >= max(sg["guard_breaks_per_min"], r["guard_breaks_per_min"])),
+		"sage_baits_most": bool(sg["feint_bites_per_min"] >= max(w["feint_bites_per_min"], r["feint_bites_per_min"])),
+		"returned_reads_most": bool(r["reads_per_min"] >= max(w["reads_per_min"], sg["reads_per_min"])),
+	}
+	return out
+
+
+def run_ladder(policy: "hwcore.Policy", seed: int, n_players: int = 16, sessions: int = 2, fights: int = 3,
+		skills=(0.0, 0.4, 0.75, 1.0), temperatures=(1.0, 0.6, 0.0, 0.0), gaps=None) -> dict:
+	"""The difficulty ladder (the game's Easy / Normal / Hard / Hellwalker presets: skill + sampling temperature, and
+	Easy's breather, RL::EasySwingGap: frames from one attack's commit to the next opener) in MORTAL fights against held-out players and the
+	reference bots: the keeper's win rate and damage should fall with the skill — and Easy should sit below the
+	script on the same players."""
+	if gaps is None:
+		gaps = (hwcore.easy_swing_gap(),) + (0,) * (len(skills) - 1)
+	if not (len(skills) == len(temperatures) == len(gaps)):
+		raise ValueError("run_ladder: skills, temperatures and gaps need one entry per rung")
+	# An hwrl.dll that predates the breather cannot run it: the rung runs without it and the check is skipped.
+	breather_ok = hwcore.has_eval_gap()
+	rows = []
+	for sk, temp, want_gap in list(zip(skills, temperatures, gaps)) + [(None, None, 0)]:
+		gap = int(want_gap) if breather_ok else 0
+		runs = []
+		for set_name in ("habit_mid", "habit_high", "reference"):
+			specs = players_mod.eval_sets(seed=seed, n=n_players, fights=fights, keeper_skill=sk if sk is not None else 1.0)[set_name]
+			for i, sp in enumerate(specs):
+				arm = hwcore.ARM_SCRIPT if sk is None else hwcore.ARM_RL
+				runs.append(hwcore.eval_sessions(arm, sp, sessions, seed * 7919 + 101 * i + 3 + 17 * len(runs),
+					policy=policy if sk is not None else None, immortal=False, fight_seconds=180, temperature=temp or 0.0,
+					min_swing_gap=gap))
+		d = hwcore.sum_eval_stats(runs)
+		rows.append({"skill": sk, "temperature": temp, "swing_gap": gap, "swing_gap_wanted": int(want_gap),
+			"arm": "RL" if sk is not None else "script",
+			"keeper_win_rate": d["keeper_win_rate"], "player_win_rate": d["keeper_loss_rate"], "dmg_per_min": d["dmg_per_min"],
+			"taken_per_min": d["boss_dmg_per_min"], "swings_per_min": d["swings_per_min"], "fight_seconds": d["seconds"] / max(d["fights"], 1)})
+		print(f"[eval] ladder {'script' if sk is None else f'skill {sk:.2f} T {temp:.1f} gap {gap}'}: keeper wins {d['keeper_win_rate']:.2f}, "
+			f"player wins {d['keeper_loss_rate']:.2f}, {d['dmg_per_min']:.0f} dmg/min, taken {d['boss_dmg_per_min']:.0f}/min", flush=True)
+	rl = [r for r in rows if r["arm"] == "RL"]
+	checks = {"monotone_damage": bool(all(a["dmg_per_min"] <= b["dmg_per_min"] * 1.05 for a, b in zip(rl, rl[1:])))}
+	if breather_ok or not any(g > 0 for g in gaps):
+		checks["easy_below_script"] = bool(rl[0]["dmg_per_min"] <= rows[-1]["dmg_per_min"])
+	else:
+		print("[eval] ladder: this hwrl.dll predates the Easy breather (hwrl_eval_sessions_gap): Easy ran without it; "
+			"easy_below_script skipped — rebuild with Tools\\RLBuild.bat", flush=True)
+	return {"rows": rows, "checks": checks}
 
 
 # =====================================================================================================================
@@ -412,6 +500,38 @@ def write_report(name: str, result: dict, out_dir: Path = REPORTS_DIR) -> Path:
 				L += ["| check | value |", "|---|---|"]
 				L += [f"| {k} | {('PASS' if v else 'FAIL') if isinstance(v, bool) else _f(v)} |" for k, v in arms["checks"].items()]
 				L.append("")
+	kp = result.get("keepers")
+	if kp is not None and "skipped" not in kp:
+		L += ["## The three keepers (one network, the identity input)", "",
+			"| keeper | dmg/min | taken/min | swings/min | hit rate | feints | heavies | evades | guard breaks/min | bites/min | reads/min |",
+			"|---|---|---|---|---|---|---|---|---|---|---|"]
+		for nm in hwcore.KEEPER_NAMES:
+			d = kp[nm]
+			L.append(f"| {nm} | {d['dmg_per_min']:.0f} | {d['taken_per_min']:.0f} | {d['swings_per_min']:.0f} | {d['hit_rate']:.2f} | "
+				f"{d['share_feints']:.2f} | {d['share_heavies']:.2f} | {d['share_evades']:.2f} | {d['guard_breaks_per_min']:.2f} | "
+				f"{d['feint_bites_per_min']:.2f} | {d['reads_per_min']:.2f} |")
+		L += ["", "| check | result |", "|---|---|"] + [f"| {k} | {'PASS' if v else 'FAIL'} |" for k, v in kp["checks"].items()] + [""]
+	ld = result.get("ladder")
+	if ld is not None and "skipped" not in ld:
+		L += ["## Difficulty ladder (mortal fights, held-out + reference players)", "",
+			"| keeper | skill | sampling T | swing gap | keeper wins | player wins | dmg/min | taken/min | swings/min | fight s |",
+			"|---|---|---|---|---|---|---|---|---|---|"]
+		for r in ld["rows"]:
+			L.append(f"| {r['arm']} | {_f(r['skill'], '{:.2f}')} | {_f(r['temperature'], '{:.1f}')} | {r.get('swing_gap', 0) or '—'} | {r['keeper_win_rate']:.2f} | "
+				f"{r['player_win_rate']:.2f} | {r['dmg_per_min']:.0f} | {r['taken_per_min']:.0f} | {r['swings_per_min']:.0f} | {r['fight_seconds']:.0f} |")
+		L += ["", "| check | result |", "|---|---|"] + [f"| {k} | {'PASS' if v else 'FAIL'} |" for k, v in ld["checks"].items()] + [""]
+	rd = result.get("reading")
+	if rd is not None and "skipped" not in rd:
+		import habits as habits_mod
+		L += ["## The reading test (pure habits; clean hits)", "", "| players who always… | first 5 attacks | attacks 21-60 | clean hit rate |",
+			"|---|---|---|---|"]
+		for g in habits_mod.GROUPS:
+			e = rd[g]
+			L.append(f"| {g} | {', '.join(f'{n} {v:.0%}' for n, v in e['early_mix'][:2])} | {', '.join(f'{n} {v:.0%}' for n, v in e['late_mix'][:2])} | "
+				f"{e['early']['p_hit']:.2f} → {e['late']['p_hit']:.2f} |")
+		sw = rd["switch_parry_to_stepleft"]
+		L += ["", f"Move-mix divergence early {rd['js_early']:.2f} → late {rd['js_late']:.2f} bits; habit switch at swing #30: "
+			f"{sw['pre_switch']['p_hit']:.2f} → {sw['post_switch']['p_hit']:.2f} → {sw['recovered']['p_hit']:.2f}.", ""]
 	path = out_dir / f"{name}.md"
 	path.write_text("\n".join(L), encoding="utf-8")
 	return path
@@ -426,7 +546,10 @@ def main(argv=None) -> int:
 	ap.add_argument("--ckpt", default=None, help="torch checkpoint (the curve uses it; exported to .hwrl if --hwrl is missing)")
 	ap.add_argument("--hwrl", default=None, help="exported policy (b0 / arms; the curve falls back to it)")
 	ap.add_argument("--name", default=None, help="report name (default eval-<timestamp>)")
-	ap.add_argument("--only", default="b0,curve,arms", help="comma-separated subset of b0,curve,arms")
+	ap.add_argument("--only", default="b0,curve,arms,keepers,ladder,reading", help="comma-separated subset of b0,curve,arms,keepers,ladder,reading")
+	ap.add_argument("--identity", type=int, default=-1, help="the keeper for b0 / curve / arms / reading (0 Warden, 1 Sage, 2 Returned; "
+		"default: follows --script — script 1 is the Sage's, else the Warden)")
+	ap.add_argument("--skill", type=float, default=1.0, help="the keeper's skill for b0 / arms")
 	ap.add_argument("--sessions", type=int, default=4, help="ThesisSim --sessions (b0)")
 	ap.add_argument("--script", type=int, default=0, help="Pathbreaker script (0 Warden, 1 Sage)")
 	ap.add_argument("--curve-sessions", type=int, default=128)
@@ -439,7 +562,8 @@ def main(argv=None) -> int:
 	ap.add_argument("--backend", choices=("dll", "mock"), default="dll", help="the curve's env (mock = pipeline test only)")
 	args = ap.parse_args(argv)
 	only = {s.strip() for s in args.only.split(",") if s.strip()}
-	bad = only - {"b0", "curve", "arms"}
+	ident = args.identity if args.identity >= 0 else (1 if args.script == 1 else 0)
+	bad = only - {"b0", "curve", "arms", "keepers", "ladder", "reading"}
 	if bad:
 		ap.error(f"unknown --only pieces: {sorted(bad)}")
 	if not args.ckpt and not args.hwrl:
@@ -454,7 +578,7 @@ def main(argv=None) -> int:
 		model, extra = load_checkpoint(args.ckpt)
 		result["trained"] = {k: extra.get(k) for k in ("stage", "run", "iteration", "decisions") if isinstance(extra, dict)}
 	hwrl = args.hwrl
-	if hwrl is None and model is not None and only & {"b0", "arms"}:
+	if hwrl is None and model is not None and only & {"b0", "arms", "keepers", "ladder", "reading"}:
 		try:
 			from export import export_hwrl
 			REPORTS_DIR.mkdir(parents=True, exist_ok=True)
@@ -464,11 +588,11 @@ def main(argv=None) -> int:
 			print(f"[eval] could not export a .hwrl ({type(e).__name__}: {e}); b0 / arms need --hwrl")
 
 	if "b0" in only:
-		result["b0"] = run_b0(hwrl, args.sessions, args.script) if hwrl else {"skipped": "no .hwrl"}
+		result["b0"] = run_b0(hwrl, args.sessions, args.script, identity=args.identity, skill=args.skill) if hwrl else {"skipped": "no .hwrl"}
 		print(f"[eval] b0: {result['b0'].get('b0') or result['b0'].get('skipped') or result['b0'].get('error')}", flush=True)
 
 	policy = None
-	if hwrl and hwcore.available() and (("arms" in only) or ("curve" in only and model is None)):
+	if hwrl and hwcore.available() and (only & {"arms", "keepers", "ladder", "reading"} or ("curve" in only and model is None)):
 		try:
 			policy = hwcore.Policy(hwrl)
 		except Exception as e:
@@ -481,20 +605,25 @@ def main(argv=None) -> int:
 			import torch
 			device = args.device or ("cuda" if torch.cuda.is_available() else "cpu")
 			result["curve"] = run_curve(TorchEngine(model, device), args.seed, args.backend, args.curve_sessions,
-				switch_after=args.switch_after, n_players=args.curve_players)
+				switch_after=args.switch_after, n_players=args.curve_players, identity=ident, keeper_skill=args.skill)
 			result["curve"]["engine"] = f"torch ({device})"
 		elif policy is not None:
 			result["curve"] = run_curve(CppEngine(policy), args.seed, args.backend, args.curve_sessions,
-				switch_after=args.switch_after, n_players=args.curve_players)
+				switch_after=args.switch_after, n_players=args.curve_players, identity=ident, keeper_skill=args.skill)
 			result["curve"]["engine"] = "C++ FRLPolicy"
 		else:
 			result["curve"] = {"skipped": "no policy to run"}
 
 	if "arms" in only:
 		result["arms"] = run_arms(policy, args.seed, n_players=args.arm_players, sessions=args.arm_sessions,
-			script_index=args.script) if policy is not None else \
+			script_index=args.script, identity=ident, keeper_skill=args.skill) if policy is not None else \
 			(run_arms(None, args.seed, args.arm_players, args.arm_sessions) if hwcore.available() else
 			{"skipped": "hwrl.dll not available (build it with RL\\native\\build.bat)"})
+	for piece, fn in (("keepers", lambda: run_keepers(policy, args.seed, args.arm_players, args.arm_sessions)),
+			("ladder", lambda: run_ladder(policy, args.seed, args.arm_players, args.arm_sessions)),
+			("reading", lambda: __import__("habits").reading_test(policy, 256, identity=ident))):
+		if piece in only:
+			result[piece] = fn() if policy is not None else {"skipped": "no policy"}
 	if policy is not None:
 		policy.free()
 

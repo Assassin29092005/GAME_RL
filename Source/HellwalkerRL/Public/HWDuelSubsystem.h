@@ -19,6 +19,7 @@
 #include "HWCore/HWScriptBrain.h"
 #include "HWCore/HWSim.h"
 #include "HWContactOracle.h"
+#include "HWCore/HWRLTypes.h"
 #include "HWDuelSubsystem.generated.h"
 
 class AHWCharacterBase;
@@ -48,8 +49,24 @@ public:
 	}
 	/** Forget the fighters (their actors are about to go) and return to WaitingToStart. */
 	void ClearFighters();
-	/** Open world: which boss this is — its script (HW::BossScript) and a health scale. Applied at every reset. */
-	void ConfigureBoss(int32 InScript, float InHealthScale) { BossScript = InScript; BossHealthScale = InHealthScale; }
+	/** Open world: which boss this is — its script (HW::BossScript), a health scale and which keeper the RL network plays
+	 *  (HW::RL::EKeeper: 0 Warden, 1 Sage, 2 Returned; -1 = from the boss's look / the script). Applied at every reset. */
+	void ConfigureBoss(int32 InScript, float InHealthScale, int32 InKeeper = -1)
+	{
+		BossScript = InScript;
+		BossHealthScale = InHealthScale;
+		KeeperOverride = InKeeper;
+		bBossConfigured = true;
+	}
+	/** Which keeper a boss is: -HWKeeper=<0|1|2> wins, then an explicit choice, then its look (Sevarog the Warden, Wukong
+	 *  the Sage, the Golem the Returned), then its script (1 is the Sage's). Pure: tested. */
+	static int32 KeeperIdentityFor(FName Cast, int32 Script, int32 Explicit, int32 CommandLine);
+	/** The RL keeper's configuration for the running fight (F3 overlay, result screens). */
+	int32 GetKeeperIdentity() const { return KeeperIdentity; }
+	float GetKeeperSkill() const { return KeeperSkill; }
+	float GetKeeperTemperature() const { return KeeperTemperature; }
+	int32 GetKeeperSwingGap() const { return KeeperSwingGap; }
+	bool IsKeeperAdaptive() const { return bKeeperAdaptive; }
 	/** Debug / flow tests (hw.Kill): drop a fighter's health to zero; the duel ends on its next frame. */
 	void DebugKill(HW::ESide Side);
 
@@ -143,6 +160,8 @@ private:
 	HW::ESym PlayerMovementSymbol() const;
 	FVector StepWorldDirection(HW::ESide Side, HW::EDir Dir) const;
 	void AddFlash(const FVector& Where, const FLinearColor& Color, float Size, int32 Frames);
+	void Rumble(float Intensity, float Seconds) const;
+	void RefreshKeeperIdentity();
 
 	void OpenTelemetry();
 	void FlushTelemetryRows();
@@ -169,6 +188,13 @@ private:
 	float ArenaYaw = 0.f;
 	int32 BossScript = 0;
 	float BossHealthScale = 1.f;
+	bool bBossConfigured = false; // ConfigureBoss was called (the open world); otherwise the arena: health from the keeper
+	int32 KeeperOverride = -1;
+	int32 KeeperIdentity = 0;
+	float KeeperSkill = 1.f;
+	float KeeperTemperature = 0.f;
+	int32 KeeperSwingGap = 0;
+	bool bKeeperAdaptive = false;
 
 	EHWEncounterState State = EHWEncounterState::WaitingToStart;
 	double FrameCursor = 0.0;
@@ -191,6 +217,26 @@ private:
 	TArray<FString> DecisionLog;
 	TArray<FFlash> Flashes;
 	FHitVolume LastVolume[2];
+
+	// ---- the Unreal-vs-simulator parity harness (RL/parity.py; -HWParity=<file.jsonl>) -------------------------------
+	// One JSON line per encounter with the C++ eval's own statistics (hwrl_eval_sessions: FEncounterStats + the
+	// keeper's moves and the distance at its commits), the start distance drawn as the simulator draws it (450-800)
+	// and fights capped at the simulator's 180 s. -HWSeedBase=<n> offsets the encounter seeds (one launch = one session).
+	void WriteParityRecord(bool bPlayerWon);
+	FString ParityPath;
+	int32 SeedBase = 0;
+	bool bParityTimeout = false;
+	float ParityStartDistance = 0.f;
+	double ParityDistanceSum = 0.0;
+	int32 ParityDistanceSamples = 0;
+	int32 ParityBossMoves[HW::RL::NumBossMoves] = {};
+	double ParityRealSeconds = 0.0;
+	// Experiments on the gap (command line): -HWMoveAccel= / -HWMoveBraking= (cm/s², both duelists' walking),
+	// -HWNoHitstop (the duel never holds still on a hit).
+	float MoveAccelOverride = -1.f;
+	float MoveBrakingOverride = -1.f;
+	bool bNoHitstop = false;
+	static constexpr int32 ParityMaxFrames = 180 * 60;
 
 	FString TelemetryPath;
 	double LastRealTime = 0.0;

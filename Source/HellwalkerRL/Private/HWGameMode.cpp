@@ -38,6 +38,9 @@ AHWGameMode::AHWGameMode()
 	PlayerControllerClass = AHWPlayerController::StaticClass();
 	HUDClass = AHWHUD::StaticClass();
 	PrimaryActorTick.bCanEverTick = true;
+	// The scripted checks (-HWExec / -HWShotAt / -HWQuitAt) keep their clock while the pause menu is open; everything
+	// this tick does is automation (the duel itself is paused by the world).
+	PrimaryActorTick.bTickEvenWhenPaused = true;
 }
 
 void AHWGameMode::InitGame(const FString& MapName, const FString& Options, FString& ErrorMessage)

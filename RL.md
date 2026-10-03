@@ -5,12 +5,16 @@ with a **reinforcement-learning (RL) policy trained from random initialisation**
 of the current build: the frame data, the moves, the duel rules, the fairness rules, the Read Meter and the Unreal
 presentation.
 
-> **Status (HellwalkerRL, 2026-09-30): built.** RL-0 to RL-3 and RL-5 are done; the shipped keeper passes every B0
-> check and the reading test; RL-4 (exploiter league) is not built and RL-6 is the human playtest. The engineering
-> contract is [RL/DESIGN.md](RL/DESIGN.md); results, status and the deviations the work forced (C++ inference instead
-> of NNE, the killer cooldown, the per-window aggression hinge, how reading is measured) are in [README.md](README.md).
-> The brain that plays in Unreal is the engine-free `FRLBrain` (driven by the duel subsystem) rather than a separate
-> `UHWRLBrain`. The text below is the plan as written.
+> **Status (HellwalkerRL, 2026-10-03): built.** RL-0 to RL-5 are done; RL-6 is the human playtest. The shipped keeper
+> (1.17 × 10⁹ decisions, observation layout 3) is one network that plays all three keepers at every difficulty; it passes
+> every B0 check for each keeper and the reading test, and the reading test is logged during training. RL-4's league ran
+> five rounds (ten exploiters in the population, plus learning players) but has not converged: a fresh exploiter still
+> finds a winning strategy, so "exploitability under the ceiling" is not met. The Unreal-vs-simulator gap is measured
+> (`Tools\Parity.bat`). The engineering contract is [RL/DESIGN.md](RL/DESIGN.md); results, status and the deviations the
+> work forced (C++ inference instead of NNE, the killer cooldown, the per-window aggression hinge, how reading is
+> measured, identity and skill as inputs, Easy's breather) are in [README.md](README.md). The brain that plays in Unreal
+> is the engine-free `FRLBrain` (driven by the duel subsystem) rather than a separate `UHWRLBrain`. The text below is the
+> plan as written.
 
 ---
 

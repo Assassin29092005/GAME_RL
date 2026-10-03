@@ -14,7 +14,10 @@ namespace HW
 	namespace RL
 	{
 		// Bump whenever the observation / token / action layout below changes meaning.
-		inline constexpr int32_t ObsLayoutVersion = 2; // 2: + the killer move's cooldown (ObsSelfKillerCooldown)
+		//   2: + the killer move's cooldown (ObsSelfKillerCooldown)
+		//   3: + the keeper's skill (difficulty) and identity (which of the three keepers): one network, every keeper,
+		//      every difficulty; the skill also sets how late it sees you and how freely it may chain (FSkillParams)
+		inline constexpr int32_t ObsLayoutVersion = 3;
 
 		// ------------------------------------------------------------------------------------------------------
 		// Actions: Discrete(23) = the 22 boss moves of EMoveId (BFastSlash .. BRetreat, in enum order) + Wait.
@@ -48,11 +51,53 @@ namespace HW
 		inline constexpr float   ReadMeterMinP = 0.55f;    // the READ banner needs the read head this sure (and right)
 
 		// ------------------------------------------------------------------------------------------------------
+		// Difficulty (skill in [0, 1]; 1 = the Hellwalker tier B0 grades). Lower skill is a SLOWER, more legible keeper,
+		// never a cheating or sandbagging one: it sees you later, decides less often, strings fewer attacks and waits
+		// longer between grabs / killers. The network observes its skill (ObsSkill) and learns to play its handicap.
+		// The constants above are the skill-1 values; FSkillParams(1) reproduces them exactly.
+		// ------------------------------------------------------------------------------------------------------
+		inline constexpr int32_t MaxPerceptionFrames = 16; // skill 0
+		struct FSkillParams
+		{
+			float   Skill = 1.f;
+			int32_t Perception = PerceptionFrames;       // frames late it sees the player
+			int32_t DecisionGap = DecisionGapFrames;     // min frames between decisions (and a Wait's length)
+			int32_t MaxString = MaxStringAttacks;        // attacks in one string
+			int32_t GrabCooldown = GrabCooldownFrames;
+			int32_t KillerCooldown = KillerCooldownFrames;
+		};
+		/** Skill clamped to [0, 1]: perception 16 -> 6 frames, decision gap 12 -> 6, strings 1 / 2 / 3, cooldowns x2 -> x1. */
+		FSkillParams SkillParams(float Skill);
+		/** The game's Easy: skill 0, sampled, and at least this many frames from one keeper attack's commit to its next opener (FRLConfig::MinSwingGap)
+		 *  — tuned so Easy deals less than the script (eval.py ladder: easy_below_script). Not part of the observation. */
+		constexpr int32_t EasySwingGap = 84;
+		/** The aggression floor's target at a skill: Base (the skill-1 target, 66 swings/min) minus up to 16 at skill 0. */
+		float TargetSwingsPerMin(float BaseTarget, float Skill);
+
+		// ------------------------------------------------------------------------------------------------------
+		// Identity: which keeper the network is playing (ObsIdentity one-hot). Same weights, three personalities, shaped
+		// in training by small per-identity style rewards (DESIGN.md §7) on top of the shared damage / win reward.
+		// ------------------------------------------------------------------------------------------------------
+		enum class EKeeper : int32_t
+		{
+			Warden = 0,   // the Ninefold Warden — the guard-breaker: heavy pressure, sha-chi drain, guard breaks
+			Sage = 1,     // the Monkey Sage — evasive, baits with feints, punishes from the side
+			Returned = 2, // the Warden, Returned (the final keeper) — the reader: pays for confident, correct reads
+		};
+		inline constexpr int32_t NumKeepers = 3;
+		const char* KeeperName(int32_t Identity);
+		/** The keeper's health relative to Tuning().BossHealthMax (the open world's shrine specs: 1, 0.9, 1.25). */
+		float KeeperHealthScale(int32_t Identity);
+
+		// ------------------------------------------------------------------------------------------------------
 		// The read head's classes: the 12 player symbols (ESym Neutral .. Switch). Label = the player's answer to
 		// the boss action taken at a decision: the first player commitment (its symbol) after the decision and
 		// before the next one; if none, Block when guard was held through it, else the movement symbol.
 		// ------------------------------------------------------------------------------------------------------
 		inline constexpr int32_t NumAnswerClasses = NumPlayerSymbols; // 12
+
+		/** The largest recurrent state a session can hold (FRLSession::Hidden): a boss policy's hidden size must fit. */
+		inline constexpr int32_t MaxHidden = 512;
 
 		// ------------------------------------------------------------------------------------------------------
 		// History tokens: the last HistoryTokens exchanges, newest first (index 0), each TokenFields small integers.
@@ -122,15 +167,18 @@ namespace HW
 			ObsPlayerChain = ObsPlayerWeapon + 2,      // light-chain depth / 3
 			ObsPlayerLastOutcome,                      // +5 one-hot the player's last swing outcome (perceived)
 			ObsPlayerSinceCommit = ObsPlayerLastOutcome + 5, // frames since the player's last commitment / 60, clipped [0, 2]
-			// ---- CONTEXT (5)
+			// ---- CONTEXT (5; the swing deficit is measured against the skill's target)
 			ObsFrameAdvantage,                         // keeper's frame advantage from what it perceives / 30, clipped [-2, 2]
 			ObsFightTime,                              // seconds into the fight / 180, clipped [0, 1]
 			ObsFightIndex,                             // fight index in the session / 3, clipped [0, 1]
 			ObsSwingDeficit,                           // (target swings/min - own swings/min over the last 30 s) / 60, clipped [-1, 1]
 			ObsSinceOwnSwing,                          // frames since the keeper's last attack commit / 300, clipped [0, 1]
-			ObsDim
+			// ---- KEEPER (4): who it is and how hard it plays (constant through a fight)
+			ObsSkill,                                  // skill in [0, 1] (FSkillParams)
+			ObsIdentity,                               // +3 one-hot EKeeper
+			ObsDim = ObsIdentity + NumKeepers
 		};
-		static_assert(ObsDim == 103, "observation layout changed: bump ObsLayoutVersion and retrain");
+		static_assert(ObsDim == 107, "observation layout changed: bump ObsLayoutVersion and retrain");
 		/** Human-readable name of observation feature I (debugging, the F3 overlay, RL/ logs). */
 		const char* ObsFeatureName(int32_t I);
 	}

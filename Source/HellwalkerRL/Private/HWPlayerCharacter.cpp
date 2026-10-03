@@ -1,4 +1,6 @@
 #include "HWPlayerCharacter.h"
+#include "HWSettings.h"
+#include "Engine/GameInstance.h"
 
 #include "HWCombatComponent.h"
 #include "Camera/CameraComponent.h"
@@ -61,6 +63,10 @@ void AHWPlayerCharacter::SetLockedOn(bool bLocked)
 
 void AHWPlayerCharacter::AddCameraKick(float Strength)
 {
+	// Accessibility: "camera shake" off keeps the camera still.
+	const UGameInstance* GI = GetGameInstance();
+	const UHWSettingsSubsystem* S = GI != nullptr ? GI->GetSubsystem<UHWSettingsSubsystem>() : nullptr;
+	if (S != nullptr && !S->GetCameraShake()) { return; }
 	Kick = FMath::Max(Kick, Strength);
 }
 

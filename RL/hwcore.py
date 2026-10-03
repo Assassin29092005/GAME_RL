@@ -25,9 +25,9 @@ RL_DIR = Path(__file__).resolve().parent
 DEFAULT_DLL = RL_DIR / "native" / "out" / "hwrl.dll"
 
 # ---- layout (HWCore/HWRLTypes.h) — mirrored so everything works without the DLL; validated against it on load ------
-ABI_VERSION = 1
-OBS_LAYOUT_VERSION = 2
-OBS_DIM = 103
+ABI_VERSION = 2
+OBS_LAYOUT_VERSION = 3
+OBS_DIM = 107
 NUM_ACTIONS = 23
 HISTORY_TOKENS = 32
 TOKEN_FIELDS = 6
@@ -47,6 +47,18 @@ ACTION_NAMES = (
 ACTION_WAIT = 22
 NUM_ATTACK_ACTIONS = 14          # actions 0..13 (BFastSlash .. BGrab) are attacks
 ACTION_IS_ATTACK = np.array([a < NUM_ATTACK_ACTIONS for a in range(NUM_ACTIONS)], dtype=bool)
+
+# The keepers (RL::EKeeper): one network plays all three, told which by the ObsIdentity one-hot.
+NUM_KEEPERS = 3
+KEEPER_NAMES = ("Warden", "Sage", "Returned")
+KEEPER_HEALTH_SCALE = (1.0, 0.9, 1.25)   # RL::KeeperHealthScale (the open world's shrine specs)
+
+# RL-4 exploiters (RL/native/HWRLPlayer.h): the PLAYER-side agent's layout.
+PLAYER_OBS_DIM = 99
+PLAYER_NUM_ACTIONS = 14
+PLAYER_ACTION_NAMES = ("Hold", "WalkF", "WalkB", "WalkL", "WalkR", "Guard", "Light", "Heavy", "Parry", "StepF", "StepB",
+	"StepL", "StepR", "Switch")
+STYLE_EVENTS = ("feint_bites", "evasions", "guard_breaks", "pressure_blocks")
 
 # The read head's classes: the 12 player symbols (ESym Neutral .. Switch).
 ANSWER_NAMES = ("Neutral", "Advance", "Retreat", "Light", "Heavy", "Block", "Parry", "StepF", "StepB", "StepL", "StepR", "Switch")
@@ -98,6 +110,11 @@ class HWRLPlayerSpec(Structure):
 		("chain_len", c_int32),
 		("policy_id", c_int32),
 		("tag", c_int32),
+		# v2
+		("keeper_skill", c_float),
+		("keeper_identity", c_int32),
+		("learn_rate", c_float),
+		("learn_temp", c_float),
 	]
 
 
@@ -114,6 +131,9 @@ class HWRLEnvConfig(Structure):
 		("start_distance_max", c_float),
 		("immortal", c_int32),
 		("num_threads", c_int32),
+		# v2
+		("style_scale", c_float),
+		("reserved", c_int32),
 	]
 
 
@@ -133,7 +153,20 @@ class HWRLStepOut(Structure):
 		("tag", POINTER(c_int32)),
 		("fight_index", POINTER(c_int32)),
 		("habit_phase", POINTER(c_int32)),
+		# v2
+		("identity", POINTER(c_int32)),
+		("skill", POINTER(c_float)),
+		("style", POINTER(c_float)),
+		("style_events", POINTER(c_uint8)),
+		("hits", POINTER(c_int32)),
 	]
+
+
+class HWRLBotDiag(Structure):
+	"""hwrl_capi.h HWRLBotDiag: the simulated player's own view (FBotDiag), summed over fights."""
+	_fields_ = [(n, c_int32) for n in ("frames", "actionable", "in_range", "in_range_actionable", "boss_open", "boss_open_in_range",
+		"boss_swinging", "defence_pending", "punish_starts", "aggro_starts", "response_attacks", "attack_commits", "walk_fwd",
+		"walk_back", "guarding")] + [("distance_sum", c_float), ("reserved", c_int32 * 4)]
 
 
 class HWRLEvalStats(Structure):
@@ -152,29 +185,54 @@ class HWRLEvalStats(Structure):
 		("boss_parried", c_int32),
 		("decisions", c_int32),
 		("read_counters", c_int32),
+		# v2
+		("boss_moves", c_int32 * 22),
+		("style_events", c_int32 * 4),
+		("player_swings", c_int32),
+		("distance_sum", c_float),
+		("distance_samples", c_int32),
 	]
 
 
+class HWRLAttackRecord(Structure):
+	_fields_ = [
+		("session", c_int32),
+		("k", c_int32),
+		("action", c_int32),
+		("outcome", c_int32),
+		("dealt", c_int32),
+		("habit_phase", c_int32),
+		("fight", c_int32),
+	]
+
+
+ATTACK_DTYPE = np.dtype([(name, np.int32) for name, _ in HWRLAttackRecord._fields_])
+
 # Expected sizes (all fields are 4 bytes, so no padding): a cheap guard against a header drift.
-assert ctypes.sizeof(HWRLPlayerSpec) == 340, ctypes.sizeof(HWRLPlayerSpec)
-assert ctypes.sizeof(HWRLEnvConfig) == 24
-assert ctypes.sizeof(HWRLStepOut) == 14 * ctypes.sizeof(c_void_p)
-assert ctypes.sizeof(HWRLEvalStats) == 56
+assert ctypes.sizeof(HWRLPlayerSpec) == 356, ctypes.sizeof(HWRLPlayerSpec)
+assert ctypes.sizeof(HWRLEnvConfig) == 32
+assert ctypes.sizeof(HWRLStepOut) == 19 * ctypes.sizeof(c_void_p)
+assert ctypes.sizeof(HWRLEvalStats) == 172, ctypes.sizeof(HWRLEvalStats)
+assert ctypes.sizeof(HWRLAttackRecord) == 28 and ATTACK_DTYPE.itemsize == 28
 
 
 def env_config(max_fight_seconds: int = 180, target_spm: float = 66.0, start_distance_min: float = 350.0,
-		start_distance_max: float = 900.0, immortal: bool = False, num_threads: int = 0) -> HWRLEnvConfig:
-	"""An HWRLEnvConfig. target_spm defaults to FRLConfig::TargetSwingsPerMin (66): the ObsSwingDeficit feature the
-	game's keeper sees must match what the policy was trained with."""
+		start_distance_max: float = 900.0, immortal: bool = False, num_threads: int = 0,
+		style_scale: float = 1.0) -> HWRLEnvConfig:
+	"""An HWRLEnvConfig. target_spm defaults to FRLConfig::TargetSwingsPerMin (66, the skill-1 target): the
+	ObsSwingDeficit feature the game's keeper sees must match what the policy was trained with. style_scale: the
+	per-identity style rewards (DESIGN.md §7), 0 = off."""
 	return HWRLEnvConfig(int(max_fight_seconds), float(target_spm), float(start_distance_min), float(start_distance_max),
-		1 if immortal else 0, int(num_threads))
+		1 if immortal else 0, int(num_threads), float(style_scale), 0)
 
 
 def make_spec(kind: int = KIND_HABITUAL, skill: float = 0.5, fights_in_session: int = 1, habit=None,
 		habit_switch_after: int = -1, habit_noise: float = 0.0, adapts: bool = True, tag: int = 0, policy_id: int = -1,
+		keeper_skill: float = -1.0, keeper_identity: int = -1, learn_rate: float = 0.0, learn_temp: float = -1.0,
 		**overrides) -> HWRLPlayerSpec:
 	"""An HWRLPlayerSpec with every profile override at -1 (keep the skill-derived default) unless given.
-	habit: array-like [2][4][8] (or [4][8]: used for both tables)."""
+	habit: array-like [2][4][8] (or [4][8]: used for both tables). keeper_skill / keeper_identity: the KEEPER's side of
+	the session (-1 = skill 1, the Warden). learn_rate > 0: a learning habit player."""
 	s = HWRLPlayerSpec()
 	s.kind = int(kind)
 	s.skill = float(skill)
@@ -191,6 +249,10 @@ def make_spec(kind: int = KIND_HABITUAL, skill: float = 0.5, fights_in_session: 
 		raise TypeError(f"unknown HWRLPlayerSpec fields: {sorted(overrides)}")
 	s.policy_id = int(policy_id)
 	s.tag = int(tag)
+	s.keeper_skill = float(keeper_skill)
+	s.keeper_identity = int(keeper_identity)
+	s.learn_rate = float(learn_rate)
+	s.learn_temp = float(learn_temp)
 	return s
 
 
@@ -271,11 +333,37 @@ def _declare(lib) -> None:
 		"hwrl_policy_load": ([c_char_p, POINTER(c_char), c_int32], V),
 		"hwrl_policy_free": ([V], None),
 		"hwrl_policy_hidden": ([V], c_int32),
+		"hwrl_policy_dims": ([V, POINTER(c_int32)], None),
 		"hwrl_policy_forward": ([V, c_int32, V, V, V, V, V, V, V, V], None),
 		"hwrl_policy_aux": ([V, c_int32, V, V, V], None),
-		"hwrl_eval_sessions": ([c_int32, V, POINTER(HWRLPlayerSpec), c_int32, c_uint64, c_int32, c_int32, c_int32,
+		"hwrl_eval_sessions": ([c_int32, V, POINTER(HWRLPlayerSpec), c_int32, c_uint64, c_int32, c_int32, c_int32, c_float,
 			POINTER(HWRLEvalStats)], c_int32),
+		"hwrl_eval_attack_log": ([V, V, c_int32, c_int32, c_uint64, c_int32, c_int32, c_int32, V, c_int32,
+			POINTER(HWRLEvalStats)], c_int32),
+		"hwrl_player_obs_dim": ([], c_int32),
+		"hwrl_player_num_actions": ([], c_int32),
+		"hwrl_player_action_name": ([c_int32], c_char_p),
+		"hwrl_player_obs_feature_name": ([c_int32], c_char_p),
+		"hwrl_batch_add_player_policy": ([V, V], c_int32),
+		"hwrl_pbatch_create": ([c_int32, c_uint64, POINTER(HWRLEnvConfig), V], V),
+		"hwrl_pbatch_destroy": ([V], None),
+		"hwrl_pbatch_size": ([V], c_int32),
+		"hwrl_pbatch_set_next_keeper": ([V, c_int32, c_float, c_int32, c_int32, c_int32], None),
+		"hwrl_pbatch_reset": ([V], None),
+		"hwrl_pbatch_observe": ([V, V, V], None),
+		"hwrl_pbatch_step": ([V, V, POINTER(HWRLStepOut)], None),
 	}
+	# Optional exports (newer DLLs; an older training DLL still loads without them).
+	optional = {
+		"hwrl_eval_sessions_gap": ([c_int32, V, POINTER(HWRLPlayerSpec), c_int32, c_uint64, c_int32, c_int32, c_int32, c_float,
+			c_int32, POINTER(HWRLEvalStats), POINTER(HWRLBotDiag)], c_int32),
+		"hwrl_easy_swing_gap": ([], c_int32),
+	}
+	for name, (args, res) in optional.items():
+		fn = getattr(lib, name, None)
+		if fn is not None:
+			fn.argtypes = args
+			fn.restype = res
 	missing = []
 	for name, (args, res) in sig.items():
 		try:
@@ -295,8 +383,11 @@ def _check_layout(lib) -> None:
 		"num_actions": lib.hwrl_num_actions(), "history_tokens": lib.hwrl_history_tokens(),
 		"token_fields": lib.hwrl_token_fields(), "aux_classes": lib.hwrl_aux_classes(),
 	}
+	got["player_obs_dim"] = lib.hwrl_player_obs_dim()
+	got["player_num_actions"] = lib.hwrl_player_num_actions()
 	want = {"abi": ABI_VERSION, "obs_layout": OBS_LAYOUT_VERSION, "obs_dim": OBS_DIM, "num_actions": NUM_ACTIONS,
-		"history_tokens": HISTORY_TOKENS, "token_fields": TOKEN_FIELDS, "aux_classes": AUX_CLASSES}
+		"history_tokens": HISTORY_TOKENS, "token_fields": TOKEN_FIELDS, "aux_classes": AUX_CLASSES,
+		"player_obs_dim": PLAYER_OBS_DIM, "player_num_actions": PLAYER_NUM_ACTIONS}
 	bad = {k: (got[k], want[k]) for k in want if got[k] != want[k]}
 	vocab = (c_int32 * TOKEN_FIELDS)()
 	lib.hwrl_token_vocab(vocab)
@@ -379,18 +470,22 @@ STEP_FIELDS = (
 	("reward", np.float32), ("cost", np.float32), ("fight_done", np.uint8), ("session_done", np.uint8),
 	("result", np.uint8), ("aux_label", np.int8), ("frames", np.int32), ("swings", np.int32),
 	("dmg_dealt", np.float32), ("dmg_taken", np.float32), ("read_counter", np.uint8), ("tag", np.int32),
-	("fight_index", np.int32), ("habit_phase", np.int32),
+	("fight_index", np.int32), ("habit_phase", np.int32), ("identity", np.int32), ("skill", np.float32),
+	("style", np.float32), ("style_events", np.uint8), ("hits", np.int32),
 )
+STEP_SHAPES = {"style_events": 4}   # per-env arrays wider than one value: [num_envs, n]
 
 
 class StepOut:
-	"""Numpy arrays [num_envs] for every HWRLStepOut field, plus the struct pointing at them (built once)."""
+	"""Numpy arrays [num_envs] (style_events [num_envs, 4]) for every HWRLStepOut field, plus the struct pointing at
+	them (built once)."""
 
 	def __init__(self, num_envs: int):
 		self.num_envs = num_envs
 		self.struct = HWRLStepOut()
 		for name, dt in STEP_FIELDS:
-			a = np.zeros(num_envs, dtype=dt)
+			w = STEP_SHAPES.get(name)
+			a = np.zeros((num_envs, w) if w else num_envs, dtype=dt)
 			setattr(self, name, a)
 			ctype = dict(HWRLStepOut._fields_)[name]._type_
 			setattr(self.struct, name, a.ctypes.data_as(POINTER(ctype)))
@@ -429,6 +524,15 @@ class Batch:
 		if not 0 <= env < self.num_envs:
 			raise IndexError(env)
 		self.lib.hwrl_batch_set_next_player(self._h, int(env), byref(spec))
+
+	def add_player_policy(self, policy: "Policy") -> int:
+		"""Register a player-side (exploiter) policy for kind-7 specs -> its policy_id. Keep `policy` alive as long as
+		the batch."""
+		pid = int(self.lib.hwrl_batch_add_player_policy(self._h, policy.handle))
+		if pid < 0:
+			raise ValueError(f"{policy.path}: not a player policy (side 1, {PLAYER_OBS_DIM} obs, {PLAYER_NUM_ACTIONS} actions, no tokens)")
+		self._kept = getattr(self, "_kept", []) + [policy]
+		return pid
 
 	def set_next_players(self, specs: Sequence[HWRLPlayerSpec]) -> None:
 		for i, s in enumerate(specs):
@@ -501,7 +605,17 @@ class Policy:
 		self._h = self.lib.hwrl_policy_load(os.fsencode(self.path), err, len(err))
 		if not self._h:
 			raise ValueError(f"hwrl_policy_load({self.path}): {err.value.decode(errors='replace') or 'failed'}")
-		self.hidden = int(self.lib.hwrl_policy_hidden(self._h))
+		dims = (c_int32 * 8)()
+		self.lib.hwrl_policy_dims(self._h, dims)
+		# Every array is sized by the POLICY's own dims (a player policy is not the boss's shape).
+		(self.obs_dim, self.num_actions, self.aux_classes, self.hidden, self.history_tokens, self.token_fields,
+			self.side, recurrent) = (int(d) for d in dims)
+		self.recurrent = recurrent != 0
+
+	@property
+	def is_boss(self) -> bool:
+		return (self.side == 0 and self.obs_dim == OBS_DIM and self.num_actions == NUM_ACTIONS
+			and self.history_tokens == HISTORY_TOKENS and self.token_fields == TOKEN_FIELDS and 0 < self.hidden <= 512)
 
 	@classmethod
 	def load(cls, path: os.PathLike, lib=None) -> "Policy":
@@ -518,18 +632,21 @@ class Policy:
 		if obs.ndim == 1:
 			obs = obs[None]
 		n = obs.shape[0]
-		_need(obs, np.float32, (n, OBS_DIM), "obs")
-		tokens = _need(np.ascontiguousarray(tokens, dtype=np.int8).reshape(n, HISTORY_TOKENS, TOKEN_FIELDS),
-			np.int8, (n, HISTORY_TOKENS, TOKEN_FIELDS), "tokens")
+		_need(obs, np.float32, (n, self.obs_dim), "obs")
+		K, F = self.history_tokens, self.token_fields
+		if K * F > 0:
+			tokens = _need(np.ascontiguousarray(tokens, dtype=np.int8).reshape(n, K, F), np.int8, (n, K, F), "tokens")
+		else:
+			tokens = None
 		if mask is not None:
-			mask = np.ascontiguousarray(mask).astype(np.uint8, copy=False).reshape(n, NUM_ACTIONS)
+			mask = np.ascontiguousarray(mask).astype(np.uint8, copy=False).reshape(n, self.num_actions)
 		if h_in is not None:
 			h_in = _need(np.ascontiguousarray(h_in, dtype=np.float32).reshape(n, self.hidden), np.float32, (n, self.hidden), "h_in")
 		h_out = np.zeros((n, self.hidden), np.float32)
-		logits = np.zeros((n, NUM_ACTIONS), np.float32)
+		logits = np.zeros((n, self.num_actions), np.float32)
 		value = np.zeros(n, np.float32)
 		argmax = np.zeros(n, np.int32)
-		self.lib.hwrl_policy_forward(self._h, n, obs.ctypes.data, tokens.ctypes.data, _ptr(mask), _ptr(h_in),
+		self.lib.hwrl_policy_forward(self._h, n, obs.ctypes.data, _ptr(tokens), _ptr(mask), _ptr(h_in),
 			h_out.ctypes.data, logits.ctypes.data, value.ctypes.data, argmax.ctypes.data)
 		return {"logits": logits, "value": value, "argmax": argmax, "h_out": h_out}
 
@@ -541,7 +658,7 @@ class Policy:
 		n = h.shape[0]
 		_need(h, np.float32, (n, self.hidden), "h")
 		a = np.ascontiguousarray(actions, dtype=np.int32).reshape(n)
-		probs = np.zeros((n, AUX_CLASSES), np.float32)
+		probs = np.zeros((n, self.aux_classes), np.float32)
 		self.lib.hwrl_policy_aux(self._h, n, h.ctypes.data, a.ctypes.data, probs.ctypes.data)
 		return probs
 
@@ -570,7 +687,10 @@ class Policy:
 # =====================================================================================================================
 
 def eval_stats_dict(st: HWRLEvalStats) -> dict:
-	d = {name: getattr(st, name) for name, _ in HWRLEvalStats._fields_}
+	d = {}
+	for name, _ in HWRLEvalStats._fields_:
+		v = getattr(st, name)
+		d[name] = list(v) if name in ("boss_moves", "style_events") else v
 	minutes = max(d["seconds"], 1e-6) / 60.0
 	swings = max(d["boss_swings"], 1)
 	fights = max(d["fights"], 1)
@@ -583,7 +703,11 @@ def eval_stats_dict(st: HWRLEvalStats) -> dict:
 		"keeper_loss_rate": d["boss_deaths"] / fights,
 		"timeout_rate": d["timeouts"] / fights,
 		"read_counters_per_min": d["read_counters"] / minutes,
+		"mean_distance": d["distance_sum"] / max(d["distance_samples"], 1),
+		"player_swings_per_min": d["player_swings"] / minutes,
 	})
+	for i, name in enumerate(STYLE_EVENTS):
+		d[f"{name}_per_min"] = d["style_events"][i] / minutes
 	return d
 
 
@@ -592,22 +716,129 @@ def sum_eval_stats(dicts: Iterable[dict]) -> dict:
 	acc = HWRLEvalStats()
 	for d in dicts:
 		for name, ctype in HWRLEvalStats._fields_:
-			setattr(acc, name, getattr(acc, name) + (d[name] if ctype is c_int32 else float(d[name])))
+			if name in ("boss_moves", "style_events"):
+				arr = getattr(acc, name)
+				for i, v in enumerate(d[name]):
+					arr[i] += int(v)
+			else:
+				setattr(acc, name, getattr(acc, name) + (d[name] if ctype is c_int32 else float(d[name])))
 	return eval_stats_dict(acc)
 
 
+def easy_swing_gap(lib=None) -> int:
+	"""RL::EasySwingGap: the game's Easy breather — frames from one keeper attack's commit to its next opener."""
+	lib = lib or load_library()
+	return int(lib.hwrl_easy_swing_gap()) if hasattr(lib, "hwrl_easy_swing_gap") else 84
+
+
 def eval_sessions(arm: int, spec: HWRLPlayerSpec, sessions: int, seed: int, policy: Optional[Policy] = None,
-		immortal: bool = True, fight_seconds: int = 90, script_index: int = 0, lib=None) -> dict:
+		immortal: bool = True, fight_seconds: int = 90, script_index: int = 0, temperature: float = 0.0,
+		min_swing_gap: int = 0, bot_diag: bool = False, lib=None) -> dict:
 	"""`sessions` sessions of spec.fights_in_session fights vs the spec's player, the brain deciding in C++ (arm 0
-	script, 1 classic, 2 RL — needs `policy`). Deterministic in `seed`: every arm sees identical players."""
+	script, 1 classic, 2 RL — needs `policy`; the spec's keeper_skill / keeper_identity apply to it; temperature > 0
+	samples; min_swing_gap > 0 = the Easy breather; bot_diag = also return the simulated player's diagnostics as
+	d["bot_diag"]). Deterministic in `seed`: every arm sees identical players."""
 	lib = lib or load_library()
 	if arm == ARM_RL and policy is None:
 		raise ValueError("arm 2 (RL) needs a policy")
 	st = HWRLEvalStats()
-	rc = lib.hwrl_eval_sessions(int(arm), policy.handle if policy is not None else None, byref(spec), int(sessions),
-		c_uint64(int(seed) & 0xFFFFFFFFFFFFFFFF), 1 if immortal else 0, int(fight_seconds), int(script_index), byref(st))
+	diag = HWRLBotDiag()
+	if min_swing_gap > 0 or bot_diag:
+		if not has_eval_gap(lib):
+			raise HWRLUnavailable("hwrl.dll predates hwrl_eval_sessions_gap (the Easy breather, bot diagnostics): "
+				"rebuild it (Tools\\RLBuild.bat)")
+		rc = lib.hwrl_eval_sessions_gap(int(arm), policy.handle if policy is not None else None, byref(spec), int(sessions),
+			c_uint64(int(seed) & 0xFFFFFFFFFFFFFFFF), 1 if immortal else 0, int(fight_seconds), int(script_index),
+			float(temperature), int(min_swing_gap), byref(st), byref(diag) if bot_diag else None)
+	else:
+		rc = lib.hwrl_eval_sessions(int(arm), policy.handle if policy is not None else None, byref(spec), int(sessions),
+			c_uint64(int(seed) & 0xFFFFFFFFFFFFFFFF), 1 if immortal else 0, int(fight_seconds), int(script_index),
+			float(temperature), byref(st))
 	if rc < 0:
-		raise RuntimeError(f"hwrl_eval_sessions(arm={arm}) returned {rc}")
+		raise RuntimeError(f"hwrl_eval_sessions(arm={arm}) returned {rc}: " + ("not a playable boss policy" if rc == -2 else "error"))
 	d = eval_stats_dict(st)
 	d["rc"] = int(rc)
+	if bot_diag:
+		d["bot_diag"] = {name: getattr(diag, name) for name, _ in HWRLBotDiag._fields_ if name != "reserved"}
 	return d
+
+
+def has_eval_gap(lib=None) -> bool:
+	"""Whether this hwrl.dll has hwrl_eval_sessions_gap (the Easy breather, bot diagnostics)."""
+	lib = lib or load_library()
+	return hasattr(lib, "hwrl_eval_sessions_gap")
+
+
+def attack_log(policy: Policy, specs: Sequence[HWRLPlayerSpec], sessions: int, seed: int, immortal: bool = True,
+		fight_seconds: int = 60, num_threads: int = 0, max_records: Optional[int] = None, lib=None):
+	"""The reading test's raw material (hwrl_eval_attack_log): `sessions` sessions of the RL keeper (greedy, C++,
+	fresh memory each), session s vs specs[s % len(specs)], on all cores. -> (records: numpy structured array with
+	fields session, k, action, outcome, dealt, habit_phase, fight; stats dict)."""
+	lib = lib or load_library()
+	arr = (HWRLPlayerSpec * len(specs))()
+	for i, sp in enumerate(specs):
+		ctypes.memmove(byref(arr[i]), byref(sp), ctypes.sizeof(HWRLPlayerSpec))
+	cap = int(max_records or max(1024, sessions * fight_seconds * 4))
+	while True:
+		out = np.zeros(cap, dtype=ATTACK_DTYPE)
+		st = HWRLEvalStats()
+		n = lib.hwrl_eval_attack_log(policy.handle, ctypes.addressof(arr), len(specs), int(sessions),
+			c_uint64(int(seed) & 0xFFFFFFFFFFFFFFFF), 1 if immortal else 0, int(fight_seconds), int(num_threads),
+			out.ctypes.data, cap, byref(st))
+		if n < 0:
+			raise RuntimeError("hwrl_eval_attack_log failed (not a playable boss policy?)")
+		total = sum(st.boss_moves[a] for a in range(NUM_ATTACK_ACTIONS))
+		if n < cap or st.boss_swings <= cap:
+			return out[:n], eval_stats_dict(st)
+		cap = int(st.boss_swings) + 16   # the buffer was too small: run again with room for every record
+
+
+class PlayerBatch:
+	"""RL-4: N exploiter-training envs (FRLPlayerEnvBatch) — the PLAYER decides (every 4 frames), the keeper is a
+	frozen boss policy in C++. Lifecycle as Batch: set_next_keeper(i, ...) for every env -> reset() -> observe() /
+	step() ...; after session_done[i] env i plays its pending keeper: give it the next one."""
+
+	def __init__(self, num_envs: int, boss: Policy, seed: int = 0, config: Optional[HWRLEnvConfig] = None, lib=None):
+		self.lib = lib or load_library()
+		self.boss = boss   # keep it alive
+		self.config = config if config is not None else env_config(style_scale=0.0)
+		self._h = self.lib.hwrl_pbatch_create(int(num_envs), c_uint64(int(seed) & 0xFFFFFFFFFFFFFFFF), byref(self.config), boss.handle)
+		if not self._h:
+			raise HWRLUnavailable(f"hwrl_pbatch_create failed ({boss.path} is not a playable boss policy?)")
+		self.num_envs = n = int(self.lib.hwrl_pbatch_size(self._h))
+		self.out = StepOut(n)
+		self.obs = np.zeros((n, PLAYER_OBS_DIM), np.float32)
+		self.mask = np.zeros((n, PLAYER_NUM_ACTIONS), np.uint8)
+		self._actions = np.zeros(n, np.int32)
+
+	def set_next_keeper(self, env: int, skill: float = 1.0, identity: int = 0, fights: int = 1, tag: int = 0) -> None:
+		self.lib.hwrl_pbatch_set_next_keeper(self._h, int(env), float(skill), int(identity), int(fights), int(tag))
+
+	def reset(self) -> None:
+		self.lib.hwrl_pbatch_reset(self._h)
+
+	def observe(self, obs: Optional[np.ndarray] = None, mask: Optional[np.ndarray] = None):
+		n = self.num_envs
+		obs = self.obs if obs is None else _need(obs, np.float32, (n, PLAYER_OBS_DIM), "obs")
+		mask = self.mask if mask is None else _need(mask, np.uint8, (n, PLAYER_NUM_ACTIONS), "mask")
+		self.lib.hwrl_pbatch_observe(self._h, obs.ctypes.data, mask.ctypes.data)
+		return obs, mask
+
+	def step(self, actions) -> StepOut:
+		n = self.num_envs
+		self._actions[:] = np.asarray(actions).reshape(n)
+		self.lib.hwrl_pbatch_step(self._h, self._actions.ctypes.data, byref(self.out.struct))
+		return self.out
+
+	def destroy(self) -> None:
+		if getattr(self, "_h", None):
+			self.lib.hwrl_pbatch_destroy(self._h)
+			self._h = None
+
+	close = destroy
+
+	def __del__(self):
+		try:
+			self.destroy()
+		except Exception:
+			pass

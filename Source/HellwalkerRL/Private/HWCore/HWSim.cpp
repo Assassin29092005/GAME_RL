@@ -100,7 +100,7 @@ namespace HW
 			else if (M.Kind == EMoveKind::Locomotion)
 			{
 				const FVec2 Face = FacingOf(static_cast<ESide>(I)); // locomotion re-aims every frame
-				if (M.Dir == EDir::Forward && Distance() <= 130.f) { continue; }
+				if (M.Dir == EDir::Forward && Distance() <= ApproachStopDistance) { continue; }
 				Pos[I] = AddScaled(Pos[I], DirVector(M.Dir, Face), PerFrame);
 			}
 		}
@@ -247,9 +247,27 @@ namespace HW
 
 	void FPlayerBot::OnEvents(const std::vector<FDuelEvent>& Events, const FDuel& Duel)
 	{
-		(void)Duel;
 		for (const FDuelEvent& E : Events)
 		{
+			// Learning players: what the response to this swing earned (the swing is the boss's current one).
+			if (Prof.LearnRate > 0.f && E.Type == EDuelEvent::Outcome && E.Side == ESide::Boss && RespClass >= 0
+				&& Duel.Get(ESide::Boss).CommitFrame == RespSwingFrame)
+			{
+				float R = 0.f;
+				switch (E.Outcome)
+				{
+				case EHitOutcome::Hit:     R = Move(E.Move).bUnblockable ? -1.5f : -1.f; break;
+				case EHitOutcome::Blocked: R = 0.25f; break;
+				case EHitOutcome::Whiff:   R = 1.f; break;
+				case EHitOutcome::Parried: R = 1.5f; break;
+				default: break;
+				}
+				FBotMemory& Mem = Memory != nullptr ? *Memory : OwnMemory;
+				float& Q = Mem.Q[RespClass][RespColumn];
+				Q += Prof.LearnRate * (R - Q);
+				++Mem.Updates;
+				RespClass = -1;
+			}
 			if (E.Type == EDuelEvent::Commit && E.Side == ESide::Boss && Move(E.Move).IsAttack())
 			{
 				FeintWariness *= 0.96f; // fades a little with every swing
@@ -320,18 +338,36 @@ namespace HW
 			static constexpr EResp Resp[FBotProfile::HabitResponses] = {
 				EResp::Parry, EResp::Block, EResp::StepL, EResp::StepR, EResp::StepB, EResp::StepF, EResp::Attack, EResp::None };
 			const int32_t C = HabitClassOf(M);
+			RespClass = -1;
 			if (C < 0 || Rng.Chance(Prof.HabitNoise)) { return Resp[Rng.RandHelper(FBotProfile::HabitResponses)]; }
 			const float* Row = Prof.Habit[HabitPhase][C];
+			// A learning player tilts its habit by what each answer has earned against this keeper (a small floor
+			// keeps every answer reachable, so a habit can be unlearned into something it never did before).
+			float Wt[FBotProfile::HabitResponses];
+			const FBotMemory& Mem = Memory != nullptr ? *Memory : OwnMemory;
+			const bool bLearn = Prof.LearnRate > 0.f;
+			const float Temp = Prof.LearnTemp > 0.05f ? Prof.LearnTemp : 0.05f;
 			float Sum = 0.f;
-			for (int32_t I = 0; I < FBotProfile::HabitResponses; ++I) { Sum += Row[I] > 0.f ? Row[I] : 0.f; }
+			for (int32_t I = 0; I < FBotProfile::HabitResponses; ++I)
+			{
+				float W = Row[I] > 0.f ? Row[I] : 0.f;
+				if (bLearn) { W = (W + 0.02f) * std::exp(Mem.Q[C][I] / Temp); }
+				Wt[I] = W;
+				Sum += W;
+			}
 			if (Sum <= 0.f) { return EResp::None; }
 			float R = Rng.FRand() * Sum;
 			EResp Picked = EResp::None;
+			int32_t Column = FBotProfile::HabitResponses - 1;
 			for (int32_t I = 0; I < FBotProfile::HabitResponses; ++I)
 			{
-				const float W = Row[I] > 0.f ? Row[I] : 0.f;
-				if (R < W) { Picked = Resp[I]; break; }
-				R -= W;
+				if (R < Wt[I]) { Picked = Resp[I]; Column = I; break; }
+				R -= Wt[I];
+			}
+			if (bLearn)
+			{
+				RespClass = C;
+				RespColumn = Column;
 			}
 			// Seeing the killer's red mark overrides a block / parry habit: those cannot stop it.
 			if (bSeesKiller && (Picked == EResp::Block || Picked == EResp::Parry)) { return EResp::StepB; }
@@ -365,6 +401,8 @@ namespace HW
 			OutFwd = OutLat = 0.f;
 			return;
 		}
+		++DiagC.Frames;
+		DiagC.DistanceSum += Dist;
 
 		// ---- Defence: plan a response once per boss swing, after a reaction delay -----------------
 		const bool bBossSwinging = Boss.State == EFighterState::Acting && Boss.CurrentMove().IsAttack() && !Boss.bSwingResolved;
@@ -381,6 +419,8 @@ namespace HW
 				bool bSawFeint = false;
 				Planned = ChooseResponse(M, bSawFeint);
 				PlannedCommitFrame = Boss.CommitFrame;
+				PlannedPhase = HabitPhase;
+				RespSwingFrame = Boss.CommitFrame;
 				bExecuted = false;
 				const int32_t Impact = (M.FakeImpactFrame >= 0 && !bSawFeint) ? M.FakeImpactFrame : M.Startup;
 				const float Aim = Planned == EResp::Parry ? Prof.ParryAim : Prof.StepAim;
@@ -408,7 +448,12 @@ namespace HW
 					: Planned == EResp::StepB ? EDir::Back : EDir::Forward;
 				const FVec2 Face = Arena.FacingOf(ESide::Player);
 				if (Duel.Commit(ESide::Player, StepFor(D), Face.X, Face.Y)) { bExecuted = true; }
-				else if (!Duel.CanCommit(ESide::Player, StepFor(D)) && Me.IsActionable()) { Planned = EResp::Block; bExecuted = false; }
+				else if (!Duel.CanCommit(ESide::Player, StepFor(D)) && Me.IsActionable())
+				{
+					Planned = EResp::Block; // out of sha-chi for a ghoststep: it guards instead (and learns about guarding)
+					bExecuted = false;
+					if (RespClass >= 0) { RespColumn = 1; }
+				}
 				break;
 			}
 			case EResp::Block:
@@ -418,6 +463,7 @@ namespace HW
 			case EResp::Attack:
 				StringLeft = 1;
 				bExecuted = true;
+				++DiagC.ResponseAttacks;
 				break;
 			default:
 				bExecuted = true;
@@ -429,11 +475,19 @@ namespace HW
 		// ---- Offence ------------------------------------------------------------------------------
 		const bool bDefencePending = !bExecuted && Planned != EResp::Attack && Prof.Kind != EBotKind::Masher;
 		const bool bInRange = Dist <= 185.f;
-		if (Me.IsActionable() && !bDefencePending)
+		const bool bBossOpen = Boss.State == EFighterState::Stagger || Boss.State == EFighterState::GuardBroken
+			|| Boss.State == EFighterState::Hitstun
+			|| (Boss.State == EFighterState::Acting && Boss.IsInRecovery() && Boss.FramesUntilActionable() > 12);
+		const bool bActionable = Me.IsActionable();
+		DiagC.Actionable += bActionable ? 1 : 0;
+		DiagC.InRange += bInRange ? 1 : 0;
+		DiagC.InRangeActionable += (bInRange && bActionable) ? 1 : 0;
+		DiagC.BossOpen += bBossOpen ? 1 : 0;
+		DiagC.BossOpenInRange += (bBossOpen && bInRange) ? 1 : 0;
+		DiagC.BossSwinging += bBossSwinging ? 1 : 0;
+		DiagC.DefencePending += bDefencePending ? 1 : 0;
+		if (bActionable && !bDefencePending)
 		{
-			const bool bBossOpen = Boss.State == EFighterState::Stagger || Boss.State == EFighterState::GuardBroken
-				|| Boss.State == EFighterState::Hitstun
-				|| (Boss.State == EFighterState::Acting && Boss.IsInRecovery() && Boss.FramesUntilActionable() > 12);
 			const int32_t WindowId = Boss.CommitFrame * 4 + static_cast<int32_t>(Boss.State);
 			if (StringLeft == 0 && bBossOpen && bInRange && PunishedWindowFrame != WindowId)
 			{
@@ -442,6 +496,7 @@ namespace HW
 				{
 					bStringHeavy = Boss.State == EFighterState::GuardBroken || Rng.Chance(Prof.HeavyRate);
 					StringLeft = bStringHeavy ? 1 : Prof.ChainLen;
+					++DiagC.PunishStarts;
 				}
 			}
 			if (StringLeft == 0 && bInRange && !bBossSwinging && Now >= NextAggroCheck)
@@ -451,6 +506,7 @@ namespace HW
 				{
 					bStringHeavy = Rng.Chance(Prof.HeavyRate);
 					StringLeft = bStringHeavy ? 1 : Prof.ChainLen;
+					++DiagC.AggroStarts;
 				}
 			}
 			if (StringLeft > 0)
@@ -464,6 +520,7 @@ namespace HW
 					const FVec2 Face = Arena.FacingOf(ESide::Player);
 					if (Duel.CommitPlayerAttack(bStringHeavy, Face.X, Face.Y))
 					{
+						++DiagC.AttackCommits;
 						--StringLeft;
 						if (StringLeft == 0 && Prof.SwitchRate > 0.f && Rng.Chance(Prof.SwitchRate)) { StringLeft = -1; }
 					}
@@ -482,6 +539,9 @@ namespace HW
 			if (Dist > Prof.PreferredRange + 25.f) { Fwd = 1.f; }
 			else if (Dist < Prof.PreferredRange - 70.f) { Fwd = -0.6f; }
 		}
+		DiagC.WalkFwd += Fwd > 0.f ? 1 : 0;
+		DiagC.WalkBack += Fwd < 0.f ? 1 : 0;
+		DiagC.Guarding += Now < GuardUntil ? 1 : 0;
 		OutFwd = Fwd;
 		OutLat = Lat;
 	}
@@ -495,6 +555,12 @@ namespace HW
 		FEncounter Enc;
 		Enc.bRecordRows = OutRows != nullptr;
 		Enc.Begin(&Brain, Cfg.Seed, Cfg.bImmortal);
+		if (!Cfg.bImmortal && Cfg.BossHealthScale != 1.f)
+		{
+			FFighter& B = Enc.Duel.Get(ESide::Boss);
+			B.HealthMax *= Cfg.BossHealthScale;
+			B.Health = B.HealthMax;
+		}
 
 		FSimArena Arena;
 		Arena.Reset(Cfg.StartDistance);
