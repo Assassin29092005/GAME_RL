@@ -8,8 +8,15 @@ rules_version = '2';
 //   surveys/{uid}   private: read / write by that uid only (the free-text comment)
 //   anything else   denied (no rule matches)
 //
-// Every upload is anonymous: request.auth.uid is the install's anonymous Firebase user. Counts are bounded so a bad
-// client cannot write absurd numbers; server times (createdAt, lastSeen, at, resetAt) must be REQUEST_TIME transforms.
+// Every upload is anonymous: request.auth.uid is the install's anonymous Firebase user. Server times (createdAt, lastSeen,
+// at, resetAt) must be REQUEST_TIME transforms.
+//
+// LEAN BY DESIGN: real Firestore evaluates at most 1,000 expressions per request, and a fight upload is one commit of two
+// writes (the fight + the player's totals). The first rules checked every counter and nested map field by field — fine in
+// the local mock, refused by real Firestore (2026-10-04: every player create and totals update was PERMISSION_DENIED).
+// So the rules check SHAPE (exactly the allowed keys), OWNERSHIP, SERVER TIME, the research fields that identify a fight,
+// and that lifetime fights / wins / losses / timeouts and each keeper's record grow by at most one fight per write. The
+// per-fight documents are the research data; a client can only ever write its own. Keep every rule cheap.
 
 service cloud.firestore {
   match /databases/{database}/documents {
@@ -18,20 +25,6 @@ service cloud.firestore {
 
     function isUser(uid) {
       return request.auth != null && request.auth.uid == uid;
-    }
-
-    // A count: an integer in [0, hi].
-    function count(v, hi) {
-      return v is int && v >= 0 && v <= hi;
-    }
-
-    // An amount (seconds, damage): a number in [0, hi].
-    function amount(v, hi) {
-      return v is number && v >= 0 && v <= hi;
-    }
-
-    function frac(v) {
-      return v is number && v >= 0 && v <= 1;
     }
 
     function text(v, lo, hi) {
@@ -48,82 +41,32 @@ service cloud.firestore {
       return v in ['Easy', 'Normal', 'Hard', 'Hellwalker', 'Adaptive'];
     }
 
-    // What the player did against one class of keeper swing: {parry|block|stepL|stepR|stepB|stepF|attack|none: count}.
-    function answerCounts(m, hi) {
-      return m is map
-        && m.keys().hasOnly(['parry', 'block', 'stepL', 'stepR', 'stepB', 'stepF', 'attack', 'none'])
-        && count(m.get('parry', 0), hi) && count(m.get('block', 0), hi)
-        && count(m.get('stepL', 0), hi) && count(m.get('stepR', 0), hi)
-        && count(m.get('stepB', 0), hi) && count(m.get('stepF', 0), hi)
-        && count(m.get('attack', 0), hi) && count(m.get('none', 0), hi);
-    }
-
-    // {fast|heavy|feint|killer: answerCounts}
-    function answers(a, hi) {
-      return a is map
-        && a.keys().hasOnly(['fast', 'heavy', 'feint', 'killer'])
-        && answerCounts(a.get('fast', {}), hi) && answerCounts(a.get('heavy', {}), hi)
-        && answerCounts(a.get('feint', {}), hi) && answerCounts(a.get('killer', {}), hi);
-    }
-
-    // One row of the keeper's expectations: {attack: string, answer: string, p: 0..1}.
-    function expectedRow(e) {
-      return e is map && e.keys().hasOnly(['attack', 'answer', 'p']) && e.keys().hasAll(['attack', 'answer', 'p'])
-        && text(e.attack, 1, 32) && text(e.answer, 1, 32) && frac(e.p);
-    }
-
-    // At most 8 rows (one per keeper attack; empty for the script). Rules cannot loop, so each index is checked.
-    function expectedList(x) {
-      return x is list && x.size() <= 8
-        && (x.size() < 1 || expectedRow(x[0])) && (x.size() < 2 || expectedRow(x[1]))
-        && (x.size() < 3 || expectedRow(x[2])) && (x.size() < 4 || expectedRow(x[3]))
-        && (x.size() < 5 || expectedRow(x[4])) && (x.size() < 6 || expectedRow(x[5]))
-        && (x.size() < 7 || expectedRow(x[6])) && (x.size() < 8 || expectedRow(x[7]));
-    }
-
     // ---- players/{uid} ------------------------------------------------------------------------------------------
 
-    // Lifetime totals. Every key optional (the server increments create them); bounded; consistent where it is
-    // certain (wins within fights, correct reads within reads).
-    function totals(t) {
-      let n = 100000000;
+    // Lifetime totals: exactly the allowed keys (the server increments create them as fights arrive).
+    function totalsShape(t) {
       return t is map
         && t.keys().hasOnly(['fights', 'wins', 'losses', 'timeouts', 'seconds', 'dmgDealt', 'dmgTaken',
                              'playerSwings', 'playerHits', 'keeperSwings', 'keeperHits', 'keeperBlocked',
                              'keeperParried', 'keeperWhiffed', 'parryAttempts', 'dodges', 'readsLanded',
-                             'predictions', 'predictionsCorrect', 'confident', 'confidentCorrect'])
-        && count(t.get('fights', 0), n) && count(t.get('wins', 0), n) && count(t.get('losses', 0), n)
-        && count(t.get('timeouts', 0), n)
-        && amount(t.get('seconds', 0), 10000000000) && amount(t.get('dmgDealt', 0), 1000000000000)
-        && amount(t.get('dmgTaken', 0), 1000000000000)
-        && count(t.get('playerSwings', 0), n) && count(t.get('playerHits', 0), n)
-        && count(t.get('keeperSwings', 0), n) && count(t.get('keeperHits', 0), n)
-        && count(t.get('keeperBlocked', 0), n) && count(t.get('keeperParried', 0), n)
-        && count(t.get('keeperWhiffed', 0), n) && count(t.get('parryAttempts', 0), n)
-        && count(t.get('dodges', 0), n) && count(t.get('readsLanded', 0), n)
-        && count(t.get('predictions', 0), n) && count(t.get('predictionsCorrect', 0), n)
-        && count(t.get('confident', 0), n) && count(t.get('confidentCorrect', 0), n)
-        && t.get('wins', 0) <= t.get('fights', 0)
-        && t.get('predictionsCorrect', 0) <= t.get('predictions', 0)
-        && t.get('confidentCorrect', 0) <= t.get('confident', 0);
+                             'predictions', 'predictionsCorrect', 'confident', 'confidentCorrect']);
     }
 
-    // How much one write may add to a lifetime counter: one fight's worth (a reset is checked on its own).
-    function grew(d, old, k, hi) {
-      let delta = d.totals.get(k, 0) - old.get('totals', {}).get(k, 0);
+    // A lifetime count grows by at most one fight's worth per write (never shrinks outside a reset).
+    function grewBy(t, was, k, hi) {
+      let delta = t.get(k, 0) - was.get(k, 0);
       return delta >= 0 && delta <= hi;
     }
 
+    // fights / wins / losses / timeouts by one; the counts the leaderboards rank by (parries, reads) by one fight's worth.
     function totalsGrowthOk(d, old) {
-      let c = 1000000;
-      return grew(d, old, 'wins', 1) && grew(d, old, 'losses', 1) && grew(d, old, 'timeouts', 1)
-        && grew(d, old, 'seconds', 86400) && grew(d, old, 'dmgDealt', 10000000) && grew(d, old, 'dmgTaken', 10000000)
-        && grew(d, old, 'playerSwings', c) && grew(d, old, 'playerHits', c)
-        && grew(d, old, 'keeperSwings', c) && grew(d, old, 'keeperHits', c)
-        && grew(d, old, 'keeperBlocked', c) && grew(d, old, 'keeperParried', c) && grew(d, old, 'keeperWhiffed', c)
-        && grew(d, old, 'parryAttempts', c) && grew(d, old, 'dodges', c) && grew(d, old, 'readsLanded', c)
-        && grew(d, old, 'predictions', c) && grew(d, old, 'predictionsCorrect', c)
-        && grew(d, old, 'confident', c) && grew(d, old, 'confidentCorrect', c);
+      let was = old.get('totals', {});
+      return grewBy(d.totals, was, 'fights', 1) && grewBy(d.totals, was, 'wins', 1)
+        && grewBy(d.totals, was, 'losses', 1) && grewBy(d.totals, was, 'timeouts', 1)
+        && grewBy(d.totals, was, 'keeperParried', 5000) && grewBy(d.totals, was, 'parryAttempts', 5000)
+        && grewBy(d.totals, was, 'keeperSwings', 5000) && grewBy(d.totals, was, 'readsLanded', 5000)
+        && grewBy(d.totals, was, 'predictions', 10000) && grewBy(d.totals, was, 'predictionsCorrect', 10000)
+        && d.totals.get('wins', 0) <= d.totals.get('fights', 0);
     }
 
     // A keeper's record grows by at most one fight (and one win) per write.
@@ -139,15 +82,12 @@ service cloud.firestore {
       return keeperGrew(d, old, 'warden') && keeperGrew(d, old, 'sage') && keeperGrew(d, old, 'returned');
     }
 
-    function keeperRecord(k) {
-      return k is map && k.keys().hasOnly(['fights', 'wins'])
-        && count(k.get('fights', 0), 100000000) && count(k.get('wins', 0), 100000000)
-        && k.get('wins', 0) <= k.get('fights', 0);
+    function keepersShape(k) {
+      return k is map && k.keys().hasOnly(['warden', 'sage', 'returned']);
     }
 
-    function keepers(k) {
-      return k is map && k.keys().hasOnly(['warden', 'sage', 'returned'])
-        && keeperRecord(k.get('warden', {})) && keeperRecord(k.get('sage', {})) && keeperRecord(k.get('returned', {}));
+    function answersShape(a) {
+      return a is map && a.keys().hasOnly(['fast', 'heavy', 'feint', 'killer']);
     }
 
     // The Likert part of the survey (public, anonymous). `at` is the server time of the answer.
@@ -175,18 +115,18 @@ service cloud.firestore {
         && (!('lastSeen' in d) || d.lastSeen == request.time)
         && (!('gameVersion' in d) || text(d.gameVersion, 0, 32))
         && (!('difficulty' in d) || difficulty(d.difficulty))
-        && (!('totals' in d) || (totals(d.totals) && d.totals.values().hasOnly([0, 0.0])))
-        && (!('keepers' in d) || keepers(d.keepers))
-        && (!('answers' in d) || answers(d.answers, 0))
-        && (!('expected' in d) || expectedList(d.expected))
+        && (!('totals' in d) || (totalsShape(d.totals) && d.totals.values().hasOnly([0, 0.0])))
+        && (!('keepers' in d) || keepersShape(d.keepers))
+        && (!('answers' in d) || (answersShape(d.answers) && d.answers.size() == 0))
+        && (!('expected' in d) || (d.expected is list && d.expected.size() == 0))
         && !('survey' in d)
         && (!('resets' in d) || d.resets == 0)
         && (!('resetAt' in d) || d.resetAt == null);
     }
 
-    // Updated by the game after every fight (one fight per commit: totals.fights grows by at most 1), by the site
-    // (nickname, survey) and by the reset (totals, keepers and answers to zero, expected [], resets + 1, resetAt now).
-    // Only the fields that changed are checked; createdAt never changes.
+    // Updated by the game after every fight (fights / wins / losses / timeouts and each keeper's record grow by at most
+    // one), by the site (nickname, survey) and by the reset (totals, keepers and answers to zero, expected [], resets + 1,
+    // resetAt now). Only the fields that changed are checked; createdAt never changes.
     function playerUpdateOk(d, old) {
       let changed = d.diff(old).affectedKeys();
       let isReset = changed.hasAny(['resets']);
@@ -197,13 +137,10 @@ service cloud.firestore {
         && (!changed.hasAny(['lastSeen']) || d.lastSeen == request.time)
         && (!changed.hasAny(['gameVersion']) || text(d.gameVersion, 0, 32))
         && (!changed.hasAny(['difficulty']) || difficulty(d.difficulty))
-        && (!changed.hasAny(['totals']) || (totals(d.totals)
-              && (isReset || (d.totals.get('fights', 0) >= old.get('totals', {}).get('fights', 0)
-                              && d.totals.get('fights', 0) <= old.get('totals', {}).get('fights', 0) + 1
-                              && totalsGrowthOk(d, old)))))
-        && (!changed.hasAny(['keepers']) || (keepers(d.keepers) && (isReset || keepersGrowthOk(d, old))))
-        && (!changed.hasAny(['answers']) || answers(d.answers, 100000000))
-        && (!changed.hasAny(['expected']) || expectedList(d.expected))
+        && (!changed.hasAny(['totals']) || (totalsShape(d.totals) && (isReset || totalsGrowthOk(d, old))))
+        && (!changed.hasAny(['keepers']) || (keepersShape(d.keepers) && (isReset || keepersGrowthOk(d, old))))
+        && (!changed.hasAny(['answers']) || answersShape(d.answers))
+        && (!changed.hasAny(['expected']) || (d.expected is list && d.expected.size() <= 8))
         && (!changed.hasAny(['survey']) || survey(d.survey))
         && (!isReset || (d.resets == old.get('resets', 0) + 1 && d.resetAt == request.time
                          && d.get('totals', {}).values().hasOnly([0, 0.0]) && d.get('expected', []).size() == 0))
@@ -219,39 +156,21 @@ service cloud.firestore {
 
     // ---- fights/{fightId} ---------------------------------------------------------------------------------------
 
-    // The v2 fields: the parry assist the fight ran with (slow motion only with the ring), how the keeper's damage was
-    // scaled, the parry window in frames, and how well the keeper knew the player when the fight began.
+    // The v2 fields (games 1.4.0+): the parry assist (slow motion only with the ring), the keeper's damage scale, the parry
+    // window and how well the keeper knew the player when the fight began.
     function assistOk(f) {
-      return f.assist in ['off', 'ring', 'ring+slowmo']
+      return f.keys().hasAll(['assist', 'slowmoScale', 'keeperDamageScale', 'parryWindowFrames', 'insight'])
+        && f.assist in ['off', 'ring', 'ring+slowmo']
         && f.slowmoScale is number && f.slowmoScale > 0 && f.slowmoScale <= 1
         && (f.assist == 'ring+slowmo' || f.slowmoScale == 1)
         && f.keeperDamageScale is number && f.keeperDamageScale > 0 && f.keeperDamageScale <= 2
         && f.parryWindowFrames is int && f.parryWindowFrames >= 1 && f.parryWindowFrames <= 60
-        && frac(f.insight);
+        && f.insight is number && f.insight >= 0 && f.insight <= 1;
     }
 
-    // v1 (games 1.0.0 - 1.3.0): exactly these 39 keys. Accepted forever: a game keeps unsent fights in its offline
-    // queue and uploads them, unchanged, whenever it next gets through.
-    function fightV1(f) {
-      return f.keys().hasOnly(['v', 'player', 'at', 'clientTime', 'session', 'fightInSession', 'gameVersion', 'mode',
-                               'playMode', 'brain', 'keeper', 'keeperName', 'difficulty', 'skill', 'adaptive', 'result',
-                               'seconds', 'playerHealth', 'keeperHealth', 'dmgDealt', 'dmgTaken', 'playerSwings',
-                               'playerHits', 'keeperSwings', 'keeperHits', 'keeperBlocked', 'keeperParried',
-                               'keeperWhiffed', 'parryAttempts', 'dodges', 'guardBreaks', 'keeperExposed',
-                               'readsLanded', 'predictions', 'predictionsCorrect', 'confident', 'confidentCorrect',
-                               'expected', 'answers'])
-        && f.keys().hasAll(['v', 'player', 'at', 'clientTime', 'session', 'fightInSession', 'gameVersion', 'mode',
-                            'playMode', 'brain', 'keeper', 'keeperName', 'difficulty', 'skill', 'adaptive', 'result',
-                            'seconds', 'playerHealth', 'keeperHealth', 'dmgDealt', 'dmgTaken', 'playerSwings',
-                            'playerHits', 'keeperSwings', 'keeperHits', 'keeperBlocked', 'keeperParried',
-                            'keeperWhiffed', 'parryAttempts', 'dodges', 'guardBreaks', 'keeperExposed',
-                            'readsLanded', 'predictions', 'predictionsCorrect', 'confident', 'confidentCorrect',
-                            'expected', 'answers'])
-        && f.v == 1;
-    }
-
-    // v2 (games 1.4.0+): the v1 keys and five more, all required.
-    function fightV2(f) {
+    // v1 (games 1.0.0 - 1.3.0, accepted forever: offline-queued bodies) or v2. Shape: only the known keys; the fields that
+    // identify a fight must be there and valid. The counters inside are the game's (own data only).
+    function fightOk(f) {
       return f.keys().hasOnly(['v', 'player', 'at', 'clientTime', 'session', 'fightInSession', 'gameVersion', 'mode',
                                'playMode', 'brain', 'keeper', 'keeperName', 'difficulty', 'skill', 'adaptive', 'result',
                                'seconds', 'playerHealth', 'keeperHealth', 'dmgDealt', 'dmgTaken', 'playerSwings',
@@ -260,48 +179,18 @@ service cloud.firestore {
                                'readsLanded', 'predictions', 'predictionsCorrect', 'confident', 'confidentCorrect',
                                'expected', 'answers', 'assist', 'slowmoScale', 'keeperDamageScale', 'parryWindowFrames',
                                'insight'])
-        && f.keys().hasAll(['v', 'player', 'at', 'clientTime', 'session', 'fightInSession', 'gameVersion', 'mode',
-                            'playMode', 'brain', 'keeper', 'keeperName', 'difficulty', 'skill', 'adaptive', 'result',
-                            'seconds', 'playerHealth', 'keeperHealth', 'dmgDealt', 'dmgTaken', 'playerSwings',
-                            'playerHits', 'keeperSwings', 'keeperHits', 'keeperBlocked', 'keeperParried',
-                            'keeperWhiffed', 'parryAttempts', 'dodges', 'guardBreaks', 'keeperExposed',
-                            'readsLanded', 'predictions', 'predictionsCorrect', 'confident', 'confidentCorrect',
-                            'expected', 'answers', 'assist', 'slowmoScale', 'keeperDamageScale', 'parryWindowFrames',
-                            'insight'])
-        && f.v == 2
-        && assistOk(f);
-    }
-
-    function fightOk(f) {
-      let c = 1000000;
-      return (fightV1(f) || fightV2(f))
+        && f.keys().hasAll(['v', 'player', 'at', 'session', 'mode', 'playMode', 'brain', 'keeper', 'difficulty', 'result',
+                            'seconds'])
+        && (f.v == 1 || (f.v == 2 && assistOk(f)))
         && f.at == request.time
-        && f.clientTime is timestamp
-        && f.session is string && f.session.matches('^[0-9a-f]{32}$')
-        && f.fightInSession is int && f.fightInSession >= 1 && f.fightInSession <= c
-        && text(f.gameVersion, 1, 32)
+        && f.session is string && f.session.size() == 32
         && f.mode in ['openworld', 'arena']
         && f.playMode in ['pathbreaker', 'hellwalker', '66days', 'arena']
         && f.brain in ['rl', 'script']
         && f.keeper in [0, 1, 2]
-        && text(f.keeperName, 0, 64)
         && difficulty(f.difficulty)
-        && frac(f.skill)
-        && f.adaptive is bool
         && f.result in ['win', 'loss', 'timeout', 'quit']
-        && amount(f.seconds, 86400)
-        && frac(f.playerHealth) && frac(f.keeperHealth)
-        && amount(f.dmgDealt, 10000000) && amount(f.dmgTaken, 10000000)
-        && count(f.playerSwings, c) && count(f.playerHits, c)
-        && count(f.keeperSwings, c) && count(f.keeperHits, c)
-        && count(f.keeperBlocked, c) && count(f.keeperParried, c) && count(f.keeperWhiffed, c)
-        && count(f.parryAttempts, c) && count(f.dodges, c)
-        && count(f.guardBreaks, c) && count(f.keeperExposed, c) && count(f.readsLanded, c)
-        && count(f.predictions, c) && count(f.predictionsCorrect, c)
-        && count(f.confident, c) && count(f.confidentCorrect, c)
-        && f.predictionsCorrect <= f.predictions && f.confidentCorrect <= f.confident
-        && expectedList(f.expected)
-        && answers(f.answers, c);
+        && f.seconds is number && f.seconds >= 0 && f.seconds <= 86400;
     }
 
     match /fights/{fightId} {

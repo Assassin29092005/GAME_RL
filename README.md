@@ -312,7 +312,7 @@ Firebase project — setup, step by step, in [web/README.md](web/README.md); the
 Each fight record (contract v2) also carries the parry assist the player had, the keeper's damage scale, the parry window
 and the keeper's insight when the fight began, so assisted and unassisted parries can be told apart.
 
-Verified end to end against a local mock of the Firebase REST API (`web/dev/mock_firebase.py`): 109 contract checks
+Verified end to end against a local mock of the Firebase REST API (`web/dev/mock_firebase.py`): 112 contract checks
 (`web/dev/e2e_test.py`, incl. the attacks the rules must refuse), and the real game uploading to it — two scripted
 fights arrived with the player's totals exactly their sum, a bot fight was refused, a fight played while the server
 was down waited and arrived at the next launch, and the site showed the player linked by the game's token.
@@ -511,6 +511,6 @@ keeper incl. skill, learning players, the notebook and the Easy breather, the cl
 Unreal automation tests: core and RL wrappers, the shipped model, menus and settings, the two modes, keepers, difficulty and
 insight, the parry assist against a real duel, the music's tension, world generation, the valley map and keeper tracking,
 the research telemetry, animation casts), `Tools\Thesis.bat --arc` (the insight arc),
-`web/dev/e2e_test.py --spawn` (109 checks of the website's data contract and security rules against the mock), `RL\.venv\Scripts\python.exe RL\tests\test_parity.py` (torch vs C++ vs ONNX),
+`web/dev/e2e_test.py --spawn` (112 checks of the website's data contract and security rules against the mock), `RL\.venv\Scripts\python.exe RL\tests\test_parity.py` (torch vs C++ vs ONNX),
 `RL\native\out\envbench.exe` (throughput, determinism, masks, rollover, attack log), `Tools\CI.bat` (all of the
 engine-free ones, as GitHub Actions runs them).

@@ -556,3 +556,13 @@ only with `-HWParryAssist=`. The unblockable telegraph moved from red to violet 
 `keeperDamageScale`, `parryWindowFrames` and `insight` (at fight start; 0 for the script); `adaptive` now means the
 insight ramp set the skill. The rules accept v1 (exactly the old keys, forever — offline-queued bodies) or v2; the owner
 must publish the new rules before distributing a 1.4.0 build.
+
+**The rules met real Firestore (2026-10-04).** The first player of the released 1.4.0 build reported an empty stats page:
+the database held nothing. Replaying the game's own requests with an existing anonymous identity showed real Firestore
+refusing every player create (PERMISSION_DENIED) while a minimal create passed; field-by-field updates isolated it — each
+piece passed alone, only the combinations failed, and the per-fight totals update failed on its own. Real Firestore
+evaluates at most 1,000 rule expressions per request; the rules validated every counter and nested map field by field
+(the local mock has no such limit, so all 109 checks had passed). The rules are now lean — shapes, ownership, server time,
+the fight's identifying fields and growth caps for fights / wins / losses / timeouts, each keeper's record and the
+leaderboards' counts (web/CONTRACT.md "Rules"); the website deletes a reset's fights 50 per request; the game logs the
+server's reason for every refusal.

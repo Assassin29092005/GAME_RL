@@ -423,16 +423,29 @@ def all_zero(m):
 	return all(is_num(v) and v == 0 for v in m.values())
 
 
+def totals_shape(t):
+	return is_map(t) and has_only(t, TOTAL_KEYS)
+
+
+def keepers_shape(k):
+	return is_map(k) and has_only(k, ("warden", "sage", "returned"))
+
+
+def answers_shape(a):
+	return is_map(a) and has_only(a, CLASS_KEYS)
+
+
 def player_create_ok(d, now):
+	"""firestore.rules playerCreateOk (lean: shapes, not field-by-field — real Firestore's 1,000-expression budget)."""
 	return (has_only(d, PLAYER_KEYS) and has_all(d, ("v", "nickname", "createdAt"))
 		and num_is(d["v"], 1) and nickname(d["nickname"]) and is_ts(d["createdAt"]) and d["createdAt"] == now
 		and ("lastSeen" not in d or (is_ts(d["lastSeen"]) and d["lastSeen"] == now))
 		and ("gameVersion" not in d or text(d["gameVersion"], 0, 32))
 		and ("difficulty" not in d or difficulty(d["difficulty"]))
-		and ("totals" not in d or (totals(d["totals"]) and all_zero(d["totals"])))
-		and ("keepers" not in d or keepers(d["keepers"]))
-		and ("answers" not in d or answers(d["answers"], 0))
-		and ("expected" not in d or expected_list(d["expected"]))
+		and ("totals" not in d or (totals_shape(d["totals"]) and all_zero(d["totals"])))
+		and ("keepers" not in d or keepers_shape(d["keepers"]))
+		and ("answers" not in d or (answers_shape(d["answers"]) and len(d["answers"]) == 0))
+		and ("expected" not in d or (is_list(d["expected"]) and len(d["expected"]) == 0))
 		and "survey" not in d
 		and ("resets" not in d or num_is(d["resets"], 0))
 		and ("resetAt" not in d or d["resetAt"] is None))
@@ -445,30 +458,25 @@ def affected_keys(d, old):
 def player_update_ok(d, old, now):
 	changed = affected_keys(d, old)
 	is_reset = "resets" in changed
-	old_fights = (old.get("totals") or {}).get("fights", 0) if is_map(old.get("totals", {})) else None
 
-	def grew(k, hi):
+	def grew_by(k, hi):
 		was = (old.get("totals") or {}).get(k, 0) if is_map(old.get("totals", {})) else 0
 		delta = d["totals"].get(k, 0) - was
 		return is_num(delta) and 0 <= delta <= hi
 
 	def totals_ok():
-		if not totals(d["totals"]):
+		if not totals_shape(d["totals"]):
 			return False
 		if is_reset:
 			return True
-		f = d["totals"].get("fights", 0)
-		c = 1000000
-		# One fight's worth per write (firestore.rules totalsGrowthOk).
-		return (is_num(old_fights) and old_fights <= f <= old_fights + 1
-			and grew("wins", 1) and grew("losses", 1) and grew("timeouts", 1)
-			and grew("seconds", 86400) and grew("dmgDealt", 10000000) and grew("dmgTaken", 10000000)
-			and all(grew(k, c) for k in ("playerSwings", "playerHits", "keeperSwings", "keeperHits", "keeperBlocked",
-				"keeperParried", "keeperWhiffed", "parryAttempts", "dodges", "readsLanded", "predictions",
-				"predictionsCorrect", "confident", "confidentCorrect")))
+		# firestore.rules totalsGrowthOk: fights / wins / losses / timeouts by one; the leaderboards' counts by one fight's worth.
+		return (all(grew_by(k, 1) for k in ("fights", "wins", "losses", "timeouts"))
+			and all(grew_by(k, 5000) for k in ("keeperParried", "parryAttempts", "keeperSwings", "readsLanded"))
+			and all(grew_by(k, 10000) for k in ("predictions", "predictionsCorrect"))
+			and d["totals"].get("wins", 0) <= d["totals"].get("fights", 0))
 
 	def keepers_ok():
-		if not keepers(d["keepers"]):
+		if not keepers_shape(d["keepers"]):
 			return False
 		if is_reset:
 			return True
@@ -490,8 +498,8 @@ def player_update_ok(d, old, now):
 		and ("difficulty" not in changed or difficulty(d["difficulty"]))
 		and ("totals" not in changed or totals_ok())
 		and ("keepers" not in changed or keepers_ok())
-		and ("answers" not in changed or answers(d["answers"], 100000000))
-		and ("expected" not in changed or expected_list(d["expected"]))
+		and ("answers" not in changed or answers_shape(d["answers"]))
+		and ("expected" not in changed or (is_list(d["expected"]) and len(d["expected"]) <= 8))
 		and ("survey" not in changed or survey(d["survey"], now))
 		and (not is_reset or (is_num(d["resets"]) and d["resets"] == old.get("resets", 0) + 1
 			and is_ts(d.get("resetAt")) and d["resetAt"] == now
@@ -500,52 +508,32 @@ def player_update_ok(d, old, now):
 
 
 def assist_ok(f):
-	"""The v2 fields: assist, slow motion (only with the ring), the keeper's damage scale, the parry window, insight."""
-	return (is_str(f["assist"]) and f["assist"] in ASSISTS
+	"""The v2 fields: assist, slow motion, the keeper's damage scale, the parry window, insight (firestore.rules assistOk)."""
+	return (has_all(f, ("assist", "slowmoScale", "keeperDamageScale", "parryWindowFrames", "insight"))
+		and is_str(f["assist"]) and f["assist"] in ASSISTS
 		and is_num(f["slowmoScale"]) and 0 < f["slowmoScale"] <= 1
 		and (f["assist"] == "ring+slowmo" or f["slowmoScale"] == 1)
 		and is_num(f["keeperDamageScale"]) and 0 < f["keeperDamageScale"] <= 2
 		and is_int(f["parryWindowFrames"]) and 1 <= f["parryWindowFrames"] <= 60
-		and frac(f["insight"]))
+		and is_num(f["insight"]) and 0 <= f["insight"] <= 1)
 
 
-def fight_v1(f):
-	"""v1 (games 1.0.0 - 1.3.0): exactly the 39 v1 keys; accepted forever (offline-queued bodies)."""
-	return has_only(f, FIGHT_KEYS_V1) and has_all(f, FIGHT_KEYS_V1) and num_is(f["v"], 1)
-
-
-def fight_v2(f):
-	"""v2 (games 1.4.0+): the v1 keys and five more, all required."""
-	return has_only(f, FIGHT_KEYS_V2) and has_all(f, FIGHT_KEYS_V2) and num_is(f["v"], 2) and assist_ok(f)
+FIGHT_CORE_KEYS = ("v", "player", "at", "session", "mode", "playMode", "brain", "keeper", "difficulty", "result", "seconds")
 
 
 def fight_ok(f, now):
-	c = 1000000
-	cnt = ("playerSwings", "playerHits", "keeperSwings", "keeperHits", "keeperBlocked", "keeperParried", "keeperWhiffed",
-		"parryAttempts", "dodges", "guardBreaks", "keeperExposed", "readsLanded", "predictions", "predictionsCorrect",
-		"confident", "confidentCorrect")
-	return ((fight_v1(f) or fight_v2(f))
+	"""firestore.rules fightOk (lean): only the known keys (the v2 superset), the identifying fields present and valid."""
+	return (has_only(f, FIGHT_KEYS_V2) and has_all(f, FIGHT_CORE_KEYS)
+		and (num_is(f["v"], 1) or (num_is(f["v"], 2) and assist_ok(f)))
 		and is_ts(f["at"]) and f["at"] == now
-		and is_ts(f["clientTime"])
-		and is_str(f["session"]) and HEX32.match(f["session"]) is not None
-		and is_int(f["fightInSession"]) and 1 <= f["fightInSession"] <= c
-		and text(f["gameVersion"], 1, 32)
+		and is_str(f["session"]) and len(f["session"]) == 32
 		and is_str(f["mode"]) and f["mode"] in ("openworld", "arena")
 		and is_str(f["playMode"]) and f["playMode"] in ("pathbreaker", "hellwalker", "66days", "arena")
 		and is_str(f["brain"]) and f["brain"] in ("rl", "script")
 		and is_num(f["keeper"]) and f["keeper"] in (0, 1, 2)
-		and text(f["keeperName"], 0, 64)
 		and difficulty(f["difficulty"])
-		and frac(f["skill"])
-		and isinstance(f["adaptive"], bool)
 		and is_str(f["result"]) and f["result"] in ("win", "loss", "timeout", "quit")
-		and amount(f["seconds"], 86400)
-		and frac(f["playerHealth"]) and frac(f["keeperHealth"])
-		and amount(f["dmgDealt"], 10000000) and amount(f["dmgTaken"], 10000000)
-		and all(count(f[k], c) for k in cnt)
-		and f["predictionsCorrect"] <= f["predictions"] and f["confidentCorrect"] <= f["confident"]
-		and expected_list(f["expected"])
-		and answers(f["answers"], c))
+		and is_num(f["seconds"]) and 0 <= f["seconds"] <= 86400)
 
 
 def survey_doc_ok(d, now):

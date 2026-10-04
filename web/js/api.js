@@ -302,7 +302,8 @@ export class RemoteBackend {
 		]);
 	}
 
-	/** The contract's reset: delete every fight of uid (pages of <= 300), then zero the player (resets + 1, resetAt now). */
+	/** The contract's reset: delete every fight of uid (pages of <= 50: real Firestore evaluates at most 1,000 rule
+	 *  expressions per request), then zero the player (resets + 1, resetAt now). */
 	async reset(onProgress = () => {}) {
 		const { uid } = this.linked();
 		let deleted = 0;
@@ -310,7 +311,7 @@ export class RemoteBackend {
 			const page = await this.runQuery({
 				from: [{ collectionId: "fights" }],
 				where: { fieldFilter: { field: { fieldPath: "player" }, op: "EQUAL", value: T.str(uid) } },
-				limit: 300,
+				limit: 50,
 			});
 			if (!page.length) break;
 			await this.commit(page.map((f) => ({ delete: this.name("fights/" + f.id) })));

@@ -116,8 +116,10 @@ saves, which sanitise).
 (`render.yaml`); data lives in Firebase, reached by **plain REST** from both the game and the site (no SDK), so the
 stdlib mock `web/dev/mock_firebase.py` stands in for Firebase in tests. `web/CONTRACT.md` is the contract and
 `web/firebase/firestore.rules` the security (fight schema v2 = v1 + assist / slowmoScale / keeperDamageScale /
-parryWindowFrames / insight; v1 stays accepted; a rules change must be published by the owner in the Firebase console) —
-change the contract first, then the game, the rules, the mock (it mirrors
+parryWindowFrames / insight; v1 stays accepted; a rules change must be published by the owner in the Firebase console;
+**real Firestore evaluates at most 1,000 rule expressions per request and the mock does not model it** — per-field rules
+that pass every mock check were refused for every player, so rules check shapes, ownership, server time and a few growth
+caps only, and must be verified against the real project after publishing) — change the contract first, then the game, the rules, the mock (it mirrors
 the rules' semantics) and the site together. The game side is `UHWTelemetrySubsystem` (anonymous sign-in, one Firestore
 commit per duel, offline queue): silent until `Config/DefaultGame.ini [HWTelemetry]` has ApiKey/ProjectId. Research
 integrity: autoplay, parity, tool-touched (`hw.Kill`, `hw.InjectParry`, `hw.Hold`) and scripted (`-unattended`,

@@ -540,18 +540,15 @@ def run(c, seed_players, site_url):
 		a.fight_no -= 1
 		ck.status("malformed fight: " + name, st_body, 403)
 
-	malformed("a field missing", lambda x: x.pop("dodges"))
 	malformed("an extra field", lambda x: x.__setitem__("cheat", B(True)))
 	malformed("wrong type (keeper as a string)", lambda x: x.__setitem__("keeper", S("zero")))
-	malformed("negative count", lambda x: x.__setitem__("playerHits", I(-1)))
-	malformed("health above 1", lambda x: x.__setitem__("playerHealth", D(1.5)))
 	malformed("unknown result", lambda x: x.__setitem__("result", S("draw")))
-	malformed("more correct reads than reads", lambda x: x.__setitem__("predictionsCorrect", I(10 ** 5)))
-	malformed("unknown answer key", lambda x: x.__setitem__("answers", M({"fast": M({"teleport": I(1)})})))
-	malformed("nine expected rows", lambda x: x.__setitem__("expected", A([M({"attack": S("x"), "answer": S("y"), "p": D(0.5)})] * 9)))
+	malformed("an identifying field missing (result)", lambda x: x.pop("result"))
+	malformed("unknown play mode", lambda x: x.__setitem__("playMode", S("godmode")))
+	malformed("seconds negative", lambda x: x.__setitem__("seconds", D(-1)))
+	malformed("nine expected rows (the player's copy is checked)", lambda x: x.__setitem__("expected", A([M({"attack": S("x"), "answer": S("y"), "p": D(0.5)})] * 9)))
 	malformed("fight id not 32 hex", lambda x: None, fight_id="NOT-HEX")
-	# the v2 fields (contract v2): exact key sets per version, and the assist / scale / window / insight ranges
-	malformed("v 1 carrying the v2 fields", lambda x: x.__setitem__("v", I(1)))
+	# the v2 fields (contract v2): present together in v2, and the assist / scale / window / insight ranges
 	malformed("v 2 with only the v1 keys", lambda x: [x.pop(k) for k in V2_KEYS])
 	malformed("v 2 missing assist", lambda x: x.pop("assist"))
 	malformed("unknown assist", lambda x: x.__setitem__("assist", S("autoparry")))
@@ -573,8 +570,8 @@ def run(c, seed_players, site_url):
 	ck.status("fight with a client-chosen `at` (not REQUEST_TIME)", c.commit(w, a.token), 403)
 	fid, f = a.make_fight()
 	w = a.fight_writes(fid, f)
-	w[1]["updateTransforms"].append({"fieldPath": "totals.dodges", "increment": I(-10 ** 6)})
-	ck.status("player update driving a total below zero (commit is atomic: the fight is not stored either)", c.commit(w, a.token), 403)
+	w[1]["updateTransforms"].append({"fieldPath": "totals.parryAttempts", "increment": I(-10 ** 6)})
+	ck.status("player update driving a ranked total down (commit is atomic: the fight is not stored either)", c.commit(w, a.token), 403)
 	ck.status("... and that fight really is absent", c.get("fights/" + fid), 404)
 	fid, f = a.make_fight()
 	w = a.fight_writes(fid, f)
@@ -599,6 +596,22 @@ def run(c, seed_players, site_url):
 	st, doc = c.get("players/" + a.uid)
 	ck.ok("after all attacks A still has 3 fights and its nickname", plain_doc(doc)["totals"]["fights"] == 3
 		and plain_doc(doc)["nickname"] == "Ember Vigil 1234", plain_doc(doc)["totals"])
+
+	# Accepted BY DESIGN (lean rules: real Firestore allows 1,000 expressions per request, so a fight's own counters are not
+	# validated field by field): odd values inside a player's OWN fight are stored; the export and the analysis treat them.
+	print("\n[lean rules: what a client may write about itself]")
+	e = Game(c, rng, nickname="Hollow Tester 4040")
+	ck.status("E creates its player page", e.create_player(), 200)
+	def accepted(name, mutate):
+		fid, f = e.make_fight()
+		fields = e.fight_fields(f)
+		mutate(fields)
+		ck.status("accepted by design (own fight, not validated per field): " + name, c.commit(e.fight_writes(fid, f, fields), e.token), 200)
+	accepted("a counter missing", lambda x: x.pop("dodges"))
+	accepted("a negative counter", lambda x: x.__setitem__("playerHits", I(-1)))
+	accepted("health above 1", lambda x: x.__setitem__("playerHealth", D(1.5)))
+	accepted("an unknown answer key", lambda x: x.__setitem__("answers", M({"fast": M({"teleport": I(1)})})))
+	accepted("v 1 carrying the v2 fields", lambda x: x.__setitem__("v", I(1)))
 
 	print("\n[an older build (v1), the v2 edges, a scripted keeper]")
 	old = Game(c, rng, nickname="Pale Exile 1300")

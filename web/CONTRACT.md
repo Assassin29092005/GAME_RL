@@ -170,6 +170,16 @@ game quits, as always.
 
 ## Rules (summary — `web/firebase/firestore.rules` is the source)
 
+**Lean by design.** Real Firestore evaluates at most 1,000 rule expressions per request, and a fight upload is one commit
+of two writes. The first rules validated every counter and nested map field by field: the local mock accepted them, real
+Firestore refused every player create and every totals update (found 2026-10-04 by replaying the game's requests). The
+rules now check shape (exactly the allowed keys), ownership, server time, the fields that identify a fight (v, mode,
+playMode, brain, keeper, difficulty, result, seconds; in v2 the assist fields and their ranges), and that a player's
+lifetime fights / wins / losses / timeouts and each keeper's record grow by at most one per write, the leaderboards'
+counts (parries, parry attempts, keeper swings, reads, predictions) by at most one fight's worth and never down outside a
+reset. A fight's own counters are not validated one by one — a client can only write its own fights; the export and the
+analysis treat out-of-range values.
+
 - `players/{uid}`: read public; create/update only by `uid` itself, schema-checked (types, ranges, counts ≥ 0,
   `createdAt` immutable after create); no delete.
 - `fights/{id}`: read public; create only with `player == request.auth.uid` and a valid schema — v1 with exactly the

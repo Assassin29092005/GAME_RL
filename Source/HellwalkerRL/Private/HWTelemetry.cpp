@@ -399,6 +399,17 @@ namespace
 		return FApp::IsUnattended() || FParse::Value(FCommandLine::Get(), TEXT("-HWExec="), Exec);
 	}
 
+	/** The server's reason for a refusal, for the log: one line, at most 300 characters. */
+	FString Reason(const FHttpResponsePtr& Resp)
+	{
+		if (!Resp.IsValid()) { return TEXT("no response"); }
+		FString T = Resp->GetContentAsString();
+		T.ReplaceInline(TEXT("\r"), TEXT(" "));
+		T.ReplaceInline(TEXT("\n"), TEXT(" "));
+		while (T.ReplaceInline(TEXT("  "), TEXT(" ")) > 0) {}
+		return T.Left(300);
+	}
+
 	/** A launch that changes the opponent or the rules (another keeper model, the duel's movement, no hit-stop). */
 	bool HasDevOverride(FString& OutWhich)
 	{
@@ -687,12 +698,13 @@ void UHWTelemetrySubsystem::OnCommitDone(FHttpRequestPtr Req, FHttpResponsePtr R
 	{
 		// Refused: the rules may be refusing a retry of a fight that did arrive (the precondition and the rules both say no
 		// to a second create), so look first; a public read of fights/{id} settles it.
+		UE_LOG(LogHellwalkerRL, Log, TEXT("telemetry: fights/%s refused (HTTP %d: %s); checking whether it already arrived."), *FightId, Code, *Reason(Resp));
 		CheckFightDelivered(FightId, Code);
 		return;
 	}
 	// Offline, a server hiccup, or a contended commit (409 ABORTED): it stays queued for the next fight or launch.
 	PersistSave();
-	UE_LOG(LogHellwalkerRL, Log, TEXT("telemetry: upload failed (HTTP %d); %d fight(s) wait for the next try."), Code, Save->Pending.Num());
+	UE_LOG(LogHellwalkerRL, Log, TEXT("telemetry: upload failed (HTTP %d: %s); %d fight(s) wait for the next try."), Code, *Reason(Resp), Save->Pending.Num());
 }
 
 void UHWTelemetrySubsystem::CheckFightDelivered(const FString& FightId, int32 Code)
@@ -819,7 +831,8 @@ void UHWTelemetrySubsystem::SignUp()
 			Flush();
 			return;
 		}
-		UE_LOG(LogHellwalkerRL, Log, TEXT("telemetry: anonymous sign-in failed (HTTP %d); trying again later."), Resp.IsValid() ? Resp->GetResponseCode() : 0);
+		UE_LOG(LogHellwalkerRL, Log, TEXT("telemetry: anonymous sign-in failed (HTTP %d: %s); trying again later."), Resp.IsValid() ? Resp->GetResponseCode() : 0,
+			*Reason(Resp));
 	});
 	Req->ProcessRequest();
 }
@@ -906,6 +919,7 @@ void UHWTelemetrySubsystem::CreatePlayer()
 		if (Code == 401) { IdToken.Reset(); return; }
 		if (Code == 400 || Code == 403)
 		{
+			UE_LOG(LogHellwalkerRL, Log, TEXT("telemetry: creating the player page: HTTP %d (%s); checking whether it exists."), Code, *Reason(Resp));
 			// The rules refuse a second create of an existing page: look before concluding anything.
 			bBusy = true;
 			const TSharedRef<IHttpRequest, ESPMode::ThreadSafe> Get = FHttpModule::Get().CreateRequest();
@@ -926,7 +940,7 @@ void UHWTelemetrySubsystem::CreatePlayer()
 			Get->ProcessRequest();
 			return;
 		}
-		UE_LOG(LogHellwalkerRL, Log, TEXT("telemetry: creating the player page failed (HTTP %d); trying again later."), Code);
+		UE_LOG(LogHellwalkerRL, Log, TEXT("telemetry: creating the player page failed (HTTP %d: %s); trying again later."), Code, *Reason(Resp));
 	});
 	Req->ProcessRequest();
 }

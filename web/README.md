@@ -174,5 +174,7 @@ needs the limit raised — write to itch.io support before the first push, and a
   must refuse (another player deleting, overwriting or inflating someone's data; malformed or negative records, v2
   fields out of range or under the wrong version). Run it with `--spawn` after changing the mock: without it, it reuses
   whatever mock is already on port 8099.
-- The mock enforces the same permissions as `web/firebase/firestore.rules`, but it is not Firestore: after publishing
-  the rules, play one duel and check the profile appears, and try a reset.
+- The mock enforces the same permissions as `web/firebase/firestore.rules`, but it is not Firestore: it does not model
+  real Firestore's limit of **1,000 rule expressions per request**. The first rules passed every mock check and were
+  refused by real Firestore for every player (2026-10-04), so keep the rules lean (CONTRACT.md "Rules"). After publishing
+  rules, play one duel with the packaged game and check the profile appears, and try a reset.
