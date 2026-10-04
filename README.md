@@ -35,7 +35,8 @@ engineering contract), [PLAN.md](PLAN.md) (the combat spec). Theme research: [Ph
 | `Tools\Parity.bat` | the Unreal-vs-simulator gap: the same autoplay players and keeper in the real game and in the training simulator |
 | `Tools\CI.bat` | what GitHub Actions runs (`.github/workflows/ci.yml`): core tests, env benchmark, torch/C++/ONNX parity, trainer self-tests |
 | **The website** | `web/` — download page + every player's stats and what the keeper learned about them ([web/README.md](web/README.md): Firebase, Render, itch.io). Local preview: `RL\.venv\Scripts\python.exe web\dev\serve.py` |
-| `Tools\ItchPush.bat <user> <game>` | upload the packaged game to itch.io with butler |
+| `Tools\MakeRelease.bat` | the download on GitHub Releases: the packaged game zipped into parts under GitHub's 2 GiB limit + `Join-and-Extract.bat` (players double-click it; Windows' own `tar` unpacks) + checksums, in `Build\Packaged\Release`; then `gh release create v<version> Build\Packaged\Release\* --notes-file <notes>` ([web/README.md](web/README.md) §3) |
+| `Tools\ItchPush.bat <user> <game>` | upload the packaged game to itch.io with butler (an alternative to GitHub Releases) |
 
 ### Controls (F1 in game shows this panel)
 

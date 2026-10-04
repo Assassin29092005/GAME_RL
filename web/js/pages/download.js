@@ -1,14 +1,26 @@
-// HELLWALKER site - #/download : the itch.io button, what the PC needs, first steps, the settings, the research note.
+// HELLWALKER site - #/download : the download button (GitHub Releases or itch.io), what the PC needs, first steps, the settings,
+// the research note.
 
 import { h, raw } from "../ui.js";
 
 export async function view({ config }) {
-	const button = config.itchUrl
-		? h`<a class="btn" href="${config.itchUrl}" rel="noopener">
+	const url = config.downloadUrl || config.itchUrl || "";
+	const onGitHub = /(^|\.)github\.com\//.test(url.replace(/^https?:\/\//, ""));
+	const host = onGitHub ? "from GitHub" : (/itch\.io/.test(url) ? "on itch.io" : "the game");
+	const button = url
+		? h`<a class="btn" href="${url}" rel="noopener">
 				<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12m0 0l-5-5m5 5l5-5M4 19h16" fill="none" stroke="currentColor" stroke-width="2.2"/></svg>
-				Download on itch.io</a>`
-		: h`<span class="btn" aria-disabled="true">Coming soon to itch.io</span>`;
-	const missing = config.itchUrl ? "" : h`<p class="hint">The download link appears here once the itch.io page is live (<code>itchUrl</code> in <code>config.js</code>).</p>`;
+				Download ${host}</a>`
+		: h`<span class="btn" aria-disabled="true">Download coming soon</span>`;
+	const missing = url ? "" : h`<p class="hint">The download link appears here once it is set (<code>downloadUrl</code> in <code>config.js</code>).</p>`;
+	const note = onGitHub ? "Windows 64-bit · 7.4 GB in 4 parts + Join-and-Extract.bat · run HellwalkerRL.exe"
+		: "Windows 64-bit · a zip of the game folder · run HellwalkerRL.exe";
+	const getSteps = onGitHub
+		? h`<li><span><b>Download every file</b> of the latest release into one folder: all the parts (<code>….zip.001</code>, <code>.002</code>, …) and <b>Join-and-Extract.bat</b>.</span></li>
+			<li><span><b>Double-click Join-and-Extract.bat.</b> It joins the parts and unpacks the <b>HellwalkerRL</b> folder (about 16 GB free while it works). Using 7-Zip? Open the <code>.001</code> part and extract it instead.</span></li>
+			<li><span>Open the folder and run <b>HellwalkerRL.exe</b>. Windows may say "Windows protected your PC" (the game is unsigned): <b>More info → Run anyway</b>.</span></li>`
+		: h`<li><span><b>Download</b> the zip (or install it with the itch app).</span></li>
+			<li><span><b>Unzip</b> the whole folder anywhere and run <b>HellwalkerRL.exe</b>. Windows may ask once whether to run an unsigned game.</span></li>`;
 	const ring = raw('<span class="ring-ico" aria-hidden="true"></span>');
 
 	const html = h`
@@ -35,7 +47,7 @@ export async function view({ config }) {
 			<div class="dl-cta">
 				${button}
 				${missing}
-				<span class="dl-cta-note">Windows 64-bit · a zip of the game folder · run HellwalkerRL.exe</span>
+				<span class="dl-cta-note">${note}</span>
 			</div>
 		</section>
 
@@ -46,7 +58,7 @@ export async function view({ config }) {
 					<tbody>
 						<tr><td>System</td><td>Windows 10 or 11, 64-bit</td></tr>
 						<tr><td>Graphics</td><td>A DirectX 12 graphics card</td></tr>
-						<tr><td>Disk</td><td>About 8 GB free</td></tr>
+						<tr><td>Disk</td><td>About 8 GB free (16 GB while unpacking)</td></tr>
 						<tr><td>Input</td><td>Keyboard and mouse, or a gamepad</td></tr>
 						<tr><td>Internet</td><td>Optional - only to send the anonymous research stats</td></tr>
 					</tbody>
@@ -56,8 +68,7 @@ export async function view({ config }) {
 			<section class="block span-6 reveal" aria-labelledby="steps-h">
 				<header class="block-head"><h2 class="block-title" id="steps-h">First steps</h2><span class="block-tag">§ 02 · Install and play</span></header>
 				<ol class="steps">
-					<li><span><b>Download</b> the zip from itch.io (or install it with the itch app).</span></li>
-					<li><span><b>Unzip</b> the whole folder anywhere and run <b>HellwalkerRL.exe</b>. Windows may ask once whether to run an unsigned game.</span></li>
+					${getSteps}
 					<li><span><b>Choose a walk:</b> <b>Normal</b> (scripted keepers you can learn) or <b>Adaptive AI</b> (the keepers that learn you).</span></li>
 					<li><span>After a few duels, open <b>Pause → Open my stats page</b>. This browser becomes yours: your page, the survey, the reset.</span></li>
 				</ol>

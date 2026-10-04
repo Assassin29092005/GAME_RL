@@ -7,7 +7,8 @@
 export default {
 	apiKey: "AIzaSyCUouUIPNeibuViQB7MuphwwEv2qfrrbUo",     // Firebase web API key (Project settings -> General -> Web API key)
 	projectId: "game-rl-c6d37",  // Firebase project id, e.g. "hellwalker-research"
-	itchUrl: "",    // the game's itch.io page, e.g. "https://yourname.itch.io/hellwalker"
+	downloadUrl: "https://github.com/Assassin29092005/GAME_RL/releases/latest", // where the game downloads (GitHub Releases, itch.io, ...)
+	itchUrl: "",    // optional: the game's itch.io page, used when downloadUrl is empty (e.g. "https://yourname.itch.io/hellwalker")
 	siteUrl: "https://hellwalker-site.onrender.com",    // where this site is hosted, e.g. "https://hellwalker.onrender.com" (the game opens {siteUrl}/#/me?t=...)
 	contact: "",    // research contact shown on #/research (an email address or a URL)
 };

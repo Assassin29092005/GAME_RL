@@ -91,7 +91,29 @@ With the old rules every v2 fight is refused: the game retries it, then drops it
 "refused by the server … three times; dropped") — those fights are lost for good. The v2 rules still accept v1 fights,
 so copies of an older version keep uploading, and their offline queues still get through.
 
-## 3. itch.io (the download)
+## 3. The download: GitHub Releases (in use)
+
+The game is downloaded from the repository's **Releases** page (free, no account needed to download, no bandwidth cap).
+GitHub limits each release file to 2 GiB, so the 7.7 GB game goes up in parts with a script that joins them:
+
+1. `Tools\Package.bat` (the Shipping build), then `Tools\MakeRelease.bat`: `Build\Packaged\Release` gets
+   `HellwalkerRL-<version>-Windows.zip.001 …` (each under 2 GiB), `Join-and-Extract.bat` (joins the parts with `copy /b` and
+   unpacks with Windows' own `tar`; 7-Zip users can open the `.001` part instead) and `SHA256SUMS.txt`.
+2. With the GitHub CLI signed in once (`gh auth login`), publish them:
+
+   ```bash
+   gh release create v1.4.0 Build/Packaged/Release/* --title "Hellwalker 1.4.0" --notes-file <release notes .md>
+   ```
+
+   (For a 7.7 GB upload, create it with `--draft`, upload with `gh release upload … --clobber` — re-run a part that
+   failed — and publish with `gh release edit v1.4.0 --draft=false --latest` once every part is there.)
+3. `web/config.js` `downloadUrl` = `https://github.com/<you>/<repo>/releases/latest`: the site's Download page links there
+   and shows the join-and-extract steps. Players need about 16 GB free while unpacking; Windows warns once that the game
+   is unsigned (More info → Run anyway).
+
+Publish the Firestore rules for a new contract version **before** the release (above).
+
+## 3b. itch.io (an alternative download)
 
 The packaged game is ~7.4 GB. itch.io caps upload size by default (on the order of 1 GB per upload); a build this size
 needs the limit raised — write to itch.io support before the first push, and allow a few days.
@@ -107,7 +129,8 @@ needs the limit raised — write to itch.io support before the first push, and a
    ```
 
    (Pushes `Build\Packaged\Windows` to the `windows` channel; later pushes upload only what changed.)
-4. Put the page address in `web/config.js` `itchUrl`, push, and publish the itch.io page.
+4. Put the page address in `web/config.js` (`downloadUrl`, or `itchUrl` when `downloadUrl` is empty), push, and publish the
+   itch.io page.
 
 ## 4. The research data
 

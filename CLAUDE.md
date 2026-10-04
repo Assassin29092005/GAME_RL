@@ -30,7 +30,7 @@ spec; frame data §6), `web/CONTRACT.md` (the telemetry data contract), `README.
 | `Tools\CI.bat` | what GitHub Actions runs (`.github/workflows/ci.yml`): core tests, env benchmark, torch/C++/ONNX parity, trainer self-tests — no Unreal |
 | `Tools\Play.bat` / `Tools\Arena.bat` / `Tools\Demo.bat` | the open world / the duel alone (`-HWBoss=Sevarog\|Wukong\|Golem`, `-HWKeeper=0\|1\|2`, `-HWPolicy=<file.hwrl>`) / watch a simulated player fight |
 | `Tools\MakeMaps.bat` | regenerate `Content/HellwalkerRL/Maps/L_Hellwalker` + `L_Arena` via `-run=HWMakeMaps` |
-| `Tools\Package.bat` / `Tools\ItchPush.bat <user> <game>` | the standalone Shipping game into `Build\Packaged` / upload it to itch.io with butler. Shipping ignores a map on the command line (always opens `L_Hellwalker`) |
+| `Tools\Package.bat` / `Tools\MakeRelease.bat` / `Tools\ItchPush.bat <user> <game>` | the standalone Shipping game into `Build\Packaged` / the GitHub Releases download (parts < 2 GiB + `Join-and-Extract.bat` + checksums in `Build\Packaged\Release`, uploaded with `gh release`; the site's `downloadUrl` points at the latest release) / upload to itch.io with butler. Shipping ignores a map on the command line (always opens `L_Hellwalker`) |
 
 Python: always `RL\.venv\Scripts\python.exe` (torch 2.11 + CUDA 12.8, numpy 2, onnx, onnxruntime, tensorboard). **The C:
 drive is nearly full**: set `TMP`/`TEMP` to `D:\Shadow\GAME_NEW_RL\RL\.pip-tmp`, never write large files to C:.

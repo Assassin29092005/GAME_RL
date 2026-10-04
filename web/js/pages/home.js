@@ -32,9 +32,8 @@ export async function view({ backend, config, onLeave }) {
 	} catch (e) {
 		poolError = e;
 	}
-	const dl = config.itchUrl
-		? h`<a class="btn" href="${config.itchUrl}" rel="noopener">Play free on Windows</a>`
-		: h`<a class="btn" href="#/download">Download the game</a>`;
+	// Always via the Download page: it carries the install steps (a GitHub release comes in parts).
+	const dl = h`<a class="btn" href="#/download">${config.downloadUrl || config.itchUrl ? "Play free on Windows" : "Download the game"}</a>`;
 	const k = (key) => (world ? world.keepers[key] : { fights: 0, wins: 0 });
 
 	const html = h`
