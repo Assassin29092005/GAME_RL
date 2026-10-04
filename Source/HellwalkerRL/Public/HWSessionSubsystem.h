@@ -4,11 +4,16 @@
 // keeper to keeper and dropped on quit. A GameInstance subsystem lives exactly as long as the session, so "reset on
 // quit" is structural. The weights (RL/Models/hellwalker_rl.hwrl, staged as Content/HellwalkerRL/RL/hellwalker_rl.hwrl)
 // are loaded once; if the file is missing, the Hellwalker tier falls back to the script (the optional-asset pattern).
+//
+// Insight (HW::FRLInsight) is the Adaptive AI mode's learning arc, also per session: how well the read head has been
+// calling YOUR answers. It sets the next fight's keeper within the difficulty's skill range (GetKeeperConfig), rises as a
+// repeated trick keeps coming true and falls when you change tricks; ResetMemory and quitting drop it with the memory.
 
 #pragma once
 
 #include "CoreMinimal.h"
 #include "Subsystems/GameInstanceSubsystem.h"
+#include "HWSettings.h"
 #include "HWTypesUE.h"
 #include "HWCore/HWRLBrain.h"
 #include "HWCore/HWRLObserver.h"
@@ -31,29 +36,39 @@ public:
 	/** What the keepers keep about you this session. */
 	HW::FRLSession& GetMemory() { return *Memory; }
 	const HW::FRLSession& GetMemory() const { return *Memory; }
-	/** Forget everything the keepers learned this session (hw.ResetModel, a new walk): memory, notebook, adaptive skill. */
+	/** Forget everything the keepers learned this session (hw.ResetModel, a new walk): memory, notebook, insight. */
 	void ResetMemory();
 	/** What the keepers wrote down about you this session (the notebook screen). Filled by the RL keeper; never an input. */
 	const HW::FRLNotebook& GetNotebook() const { return Notebook; }
 	HW::FRLNotebook& GetNotebookMutable() { return Notebook; }
 
-	// ---- difficulty (UHWSettingsSubsystem's choice, and the Adaptive controller's state for this session) ---------
-	/** The keeper's skill / sampling temperature / Easy breather (frames from one attack's commit to the next opener) for the next Hellwalker
-	 *  fight (Adaptive: this session's controller). */
+	// ---- the Adaptive AI keeper's strength: the difficulty's skill range, walked by this session's insight ----------
+	/**
+	 * The next Adaptive AI fight's skill / sampling temperature / breather (frames from one keeper attack's commit to its
+	 * next opener): UHWSettingsSubsystem::PresetFor(difficulty).SkillLo..SkillHi through HW::FRLInsight::KeeperConfig.
+	 * bOutAdaptive: true (the insight ramp set the skill). Parity runs (-HWParity=) get the fixed keeper parity always
+	 * measured, whatever the difficulty and insight: skill 1, greedy, no breather, bOutAdaptive false.
+	 */
 	void GetKeeperConfig(float& OutSkill, float& OutTemperature, bool& bOutAdaptive, int32& OutSwingGap) const;
-	/** Adaptive: after a Hellwalker fight, move the skill to keep fights close. Returns the change (0 when not Adaptive). */
+	/**
+	 * After an RL fight (call once the brain's notebook has flushed it — UHWDuelSubsystem::EndEncounter does): insight
+	 * moves toward how well the read head called your answers since the last record (HW::FRLInsight::AfterFight).
+	 * Returns the insight change. The result and health arguments only feed the log.
+	 */
 	float RecordFightForAdaptive(bool bPlayerWon, float PlayerHealthFrac, float BossHealthFrac);
-	float GetAdaptiveSkill() const { return AdaptiveSkill; }
-	float GetLastAdaptiveChange() const { return LastAdaptiveChange; }
-	/** The controller (pure, tested): keeper won with >= 40% of its health left -0.10, narrowly -0.03; the player won
-	 *  narrowly +0.04, with >= 40% left +0.10; clamped to [0, 1]. */
-	static float NextAdaptiveSkill(float Skill, bool bPlayerWon, float PlayerHealthFrac, float BossHealthFrac);
-	/** Adaptive play samples a little when it is easy (skill < 0.3). */
-	static float AdaptiveTemperature(float Skill) { return Skill < 0.3f ? 0.8f : 0.f; }
-	/** ... and below skill 0.15 it breathes between strings, up to Easy's breather at the floor (so a losing streak can
-	 *  bring it below the script, as Easy is). */
-	static int32 AdaptiveSwingGap(float Skill);
-	static constexpr float AdaptiveStart = 0.6f;
+	/** How well the keepers know you, 0..1 (0 for a fresh session). */
+	float GetInsight() const { return Insight.Insight; }
+	/** How much the last recorded fight moved it. */
+	float GetLastInsightChange() const { return LastInsightChange; }
+	const HW::FRLInsight& GetInsightState() const { return Insight; }
+	/** The skill the next Adaptive AI fight gets (GetKeeperConfig's), and how much the last recorded fight moved it (the
+	 *  result screen's "the keeper adapts" line). */
+	float GetAdaptiveSkill() const;
+	float GetLastAdaptiveChange() const { return LastSkillChange; }
+	/** Pure (tested): a difficulty's keeper at an insight — the preset's skill range through Insight.KeeperConfig. */
+	static void KeeperConfigFor(EHWDifficulty Difficulty, const HW::FRLInsight& InInsight, float& OutSkill, float& OutTemperature, int32& OutSwingGap);
+	/** -HWParity=<file> is on the command line (Tools\Parity.bat): the keeper plays the fixed config parity measures. */
+	static bool IsParityRun();
 	/** The read head, from the current memory: "if the keeper threw Move now, you would answer OutSym (OutP)". */
 	bool PredictAnswer(HW::EMoveId Move, HW::ESym& OutSym, float& OutP) const;
 
@@ -76,6 +91,7 @@ public:
 	UPROPERTY(BlueprintReadOnly, Category = "Hellwalker")
 	FString SessionId;
 
+	/** "NORMAL" (the script) / "ADAPTIVE AI" (the RL keeper), or "VARIANT A / B" in blind mode. */
 	FString TierLabel(EHWTier InTier) const;
 
 	/** Where the game looks for the weights (overridable with -HWPolicy=<file>). */
@@ -87,7 +103,11 @@ private:
 	HW::FRLPolicy Policy;
 	TUniquePtr<HW::FRLSession> Memory;
 	HW::FRLNotebook Notebook;
-	float AdaptiveSkill = AdaptiveStart;
-	float LastAdaptiveChange = 0.f;
+	HW::FRLInsight Insight;
+	float LastInsightChange = 0.f;
+	float LastSkillChange = 0.f;
+	/** The notebook's totals already fed to Insight: the next record takes what was added since (one fight's calls). */
+	int32 InsightPredictionsSeen = 0;
+	int32 InsightCorrectSeen = 0;
 	FString PolicyStatus;
 };

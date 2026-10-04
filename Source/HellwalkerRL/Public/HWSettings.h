@@ -8,8 +8,13 @@
 // buttons are fixed and shown read-only. AHWPlayerController rebuilds its Enhanced Input mapping contexts from the table
 // whenever it changes (OnBindingsChanged).
 //
-// Difficulty is stored and shown here; GetKeeperSkill() is what the keeper is configured with (HW::FRLBrain::Configure
-// + SetTemperature — wired by the duel, not by the settings).
+// Difficulty is stored and shown here; PresetFor() holds its numbers. The keeper's damage scale and the parry assist's
+// slow motion apply in both modes; the skill range only to Adaptive AI, where UHWSessionSubsystem::GetKeeperConfig walks
+// it with the session's insight (HW::FRLInsight). The duel applies all of it at a fight's start, not the settings.
+//
+// The parry assist (presentation only, the rules never change): a red ring on the keeper's weapon while a parry pressed
+// now would land, and — RingSlow — slow motion while it is lit. AssistFor() turns the setting and the difficulty into one
+// fight's FHWAssistParams.
 
 #pragma once
 
@@ -26,7 +31,40 @@ enum class EHWDifficulty : uint8
 	Normal,
 	Hard,
 	Hellwalker,
-	Adaptive
+	Adaptive UMETA(Hidden)   // retired in 1.4 (the insight ramp replaced it): kept so old saves load, then sanitised to Normal
+};
+
+/** The parry assist (presentation only). Saves store the value: new ones go last. */
+UENUM(BlueprintType)
+enum class EHWParryAssist : uint8
+{
+	RingSlow,   // the red ring, and the duel slows down while it is lit (the difficulty sets how much)
+	Ring,       // the ring only
+	Off
+};
+
+/** One fight's parry assist (UHWSettingsSubsystem::AssistFor). */
+struct FHWAssistParams
+{
+	/** The red ring while a parry pressed now would land. */
+	bool bRing = false;
+	/** The difficulty's extra tell: the keeper's attacks glow as they come (Easy). */
+	bool bIncomingGlow = false;
+	/** The duel's speed while the ring is lit and the player can act (1 = no slow motion). */
+	float SlowScale = 1.f;
+};
+
+/** A difficulty's numbers (UHWSettingsSubsystem::PresetFor). */
+struct FHWDifficultyPreset
+{
+	/** Adaptive AI: the keeper's skill knowing nothing of you (insight 0) .. knowing you (insight 1). */
+	float SkillLo = 0.f;
+	float SkillHi = 1.f;
+	/** HW::FDuel::KeeperDamageScale: the keeper's health damage is multiplied by this (both modes). */
+	float KeeperDamageScale = 1.f;
+	/** The parry assist's slow motion (RingSlow). */
+	float AssistSlowScale = 1.f;
+	bool bIncomingGlow = false;
 };
 
 /** The rebindable actions (keyboard / mouse). Movement (WASD) and Esc are fixed. New actions go last: saves store the index. */
@@ -95,7 +133,7 @@ struct HELLWALKERRL_API FHWBindingTable
 	static EHWBindScope Scope(EHWBind Action);
 	/** A short on-screen name: "LMB", "Space", "E", "F1". */
 	static FString KeyLabel(const FKey& Key);
-	/** Keyboard keys and mouse buttons only; not WASD, Esc, Enter, 1-3, the console key, the wheel — nor, for explore actions, the explorer's own keys. */
+	/** Keyboard keys and mouse buttons only; not WASD, Esc, Enter, 1-2 (the modes), the console key, the wheel — nor, for explore actions, the explorer's own keys. */
 	static bool IsBindable(const FKey& Key, EHWBindScope InScope, FString& OutWhyNot);
 
 	TArray<FHWKeyBinding> ToArray() const;
@@ -126,7 +164,8 @@ struct HELLWALKERRL_API FHWSettingsData
 	static constexpr float MinReadHold = 0.4f;
 	static constexpr float MaxReadHold = 2.f;
 
-	UPROPERTY() EHWDifficulty Difficulty = EHWDifficulty::Hellwalker;
+	UPROPERTY() EHWDifficulty Difficulty = EHWDifficulty::Normal;
+	UPROPERTY() EHWParryAssist ParryAssist = EHWParryAssist::RingSlow;   // added in 1.4: older saves load the default
 	UPROPERTY() float MouseSensitivity = 1.f;
 	UPROPERTY() bool bInvertY = false;
 	UPROPERTY() TArray<FHWKeyBinding> Bindings;
@@ -183,14 +222,39 @@ public:
 	// ---- gameplay ---------------------------------------------------------------------------------
 	EHWDifficulty GetDifficulty() const { return Data.Difficulty; }
 	void SetDifficulty(EHWDifficulty D);
-	/** What the keeper is configured with for the current difficulty (see KeeperSkillFor). */
-	void GetKeeperSkill(float& OutSkill, float& OutTemperature, bool& bOutAdaptive) const;
-	/** Easy (0.0, 1.0, no) · Normal (0.4, 0.6, no) · Hard (0.75, 0, no) · Hellwalker (1, 0, no) · Adaptive (0.6, 0, yes). */
-	static void KeeperSkillFor(EHWDifficulty D, float& OutSkill, float& OutTemperature, bool& bOutAdaptive);
-	/** Easy's breather: frames from one keeper attack's commit to its next opener (HW::RL::EasySwingGap); 0 otherwise. */
-	static int32 KeeperSwingGapFor(EHWDifficulty D);
+	/** The difficulties the menu offers, Easy .. Hellwalker (in enum order; Adaptive is retired). */
+	static constexpr int32 NumMenuDifficulties = 4;
+	/**
+	 * Every difficulty's numbers (pure, tested):
+	 *   Easy        skill 0.00 .. 0.40   damage x0.60   slow motion 0.40   incoming glow
+	 *   Normal      skill 0.00 .. 0.70   damage x0.75   slow motion 0.60
+	 *   Hard        skill 0.15 .. 0.85   damage x0.85   slow motion 0.75
+	 *   Hellwalker  skill 0.30 .. 1.00   damage x0.90   slow motion 0.85
+	 * (the retired Adaptive gets Normal's).
+	 */
+	static FHWDifficultyPreset PresetFor(EHWDifficulty D);
+	FHWDifficultyPreset GetPreset() const { return PresetFor(Data.Difficulty); }
 	static FString DifficultyName(EHWDifficulty D);
+	/** One or two sentences for the menu: how hard it hits, how it plays, what the assist does at this difficulty. */
 	static FString DifficultyBlurb(EHWDifficulty D);
+
+	/** The parry assist setting (or the -HWParryAssist= override). */
+	EHWParryAssist GetParryAssist() const { return Data.ParryAssist; }
+	void SetParryAssist(EHWParryAssist A);
+	/** -HWParryAssist=RingSlow|Ring|Off was given: that value holds even in scripted launches (which otherwise play
+	 *  without the assist), and nothing this session is saved (like -HWDifficulty). */
+	bool HasParryAssistOverride() const { return bParryAssistOverride; }
+	/** One fight's assist (pure, tested): the ring for RingSlow and Ring, the difficulty's slow motion only for RingSlow,
+	 *  the difficulty's incoming glow unless the assist is Off (Off is no help at all). */
+	static FHWAssistParams AssistFor(EHWParryAssist A, EHWDifficulty D);
+	FHWAssistParams GetAssist() const { return AssistFor(Data.ParryAssist, Data.Difficulty); }
+	/** The menu's names: "Ring + slow motion", "Ring only", "Off". */
+	static FString ParryAssistName(EHWParryAssist A);
+	static FString ParryAssistBlurb(EHWParryAssist A);
+	/** The research record's names (web/CONTRACT.md fight v2 "assist"): "off", "ring", "ring+slowmo". */
+	static FString AssistTelemetryName(const FHWAssistParams& P);
+	/** "RingSlow" / "Ring" / "Off" (case-insensitive; also the telemetry names) -> the setting. False when unknown. */
+	static bool ParseParryAssist(const FString& S, EHWParryAssist& Out);
 	float GetMouseSensitivity() const { return Data.MouseSensitivity; }
 	void SetMouseSensitivity(float V);
 	bool GetInvertY() const { return Data.bInvertY; }
@@ -248,4 +312,5 @@ private:
 	FHWGraphicsChoice GraphicsApplied;
 	TArray<FIntPoint> Resolutions;
 	bool bPersist = true;
+	bool bParryAssistOverride = false;
 };

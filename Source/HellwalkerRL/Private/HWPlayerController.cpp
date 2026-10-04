@@ -140,7 +140,6 @@ void AHWPlayerController::BuildInput()
 	IA_Map = MakeAction(TEXT("IA_HWMap"), EInputActionValueType::Boolean);
 	IA_Choice1 = MakeAction(TEXT("IA_HWChoice1"), EInputActionValueType::Boolean);
 	IA_Choice2 = MakeAction(TEXT("IA_HWChoice2"), EInputActionValueType::Boolean);
-	IA_Choice3 = MakeAction(TEXT("IA_HWChoice3"), EInputActionValueType::Boolean);
 	ExploreContext = NewObject<UInputMappingContext>(this, TEXT("IMC_HellwalkerExplore"));
 
 	// The menu's actions trigger while the game is paused (that is when the menu is open).
@@ -217,7 +216,6 @@ void AHWPlayerController::MapContexts()
 	ExploreContext->MapKey(IA_Map, Pad(EHWBind::Map));
 	ExploreContext->MapKey(IA_Choice1, EKeys::One);
 	ExploreContext->MapKey(IA_Choice2, EKeys::Two);
-	ExploreContext->MapKey(IA_Choice3, EKeys::Three);
 	for (const TPair<UInputAction*, EHWBind>& P : { TPair<UInputAction*, EHWBind>(IA_Pause, EHWBind::Pause), TPair<UInputAction*, EHWBind>(IA_Debug, EHWBind::Debug),
 		TPair<UInputAction*, EHWBind>(IA_Help, EHWBind::Help), TPair<UInputAction*, EHWBind>(IA_Notebook, EHWBind::Notebook) })
 	{
@@ -302,7 +300,6 @@ void AHWPlayerController::SetupInputComponent()
 	EIC->BindAction(IA_Map, ETriggerEvent::Started, this, &AHWPlayerController::OnMap);
 	EIC->BindAction(IA_Choice1, ETriggerEvent::Started, this, &AHWPlayerController::OnChoice, 1);
 	EIC->BindAction(IA_Choice2, ETriggerEvent::Started, this, &AHWPlayerController::OnChoice, 2);
-	EIC->BindAction(IA_Choice3, ETriggerEvent::Started, this, &AHWPlayerController::OnChoice, 3);
 
 	EIC->BindAction(IA_MenuUp, ETriggerEvent::Started, this, &AHWPlayerController::OnMenuNavStarted, 1);
 	EIC->BindAction(IA_MenuDown, ETriggerEvent::Started, this, &AHWPlayerController::OnMenuNavStarted, 2);
@@ -396,14 +393,13 @@ void AHWPlayerController::OnChoice(int32 Choice)
 	if (Phase == EHWWorldPhase::Title && Menu.GetPage() == EHWMenuPage::Title)
 	{
 		// The title's shortcuts go through its menu (which asks before a new walk erases the saved one).
-		static const FName Ids[] = { TEXT("NewPathbreaker"), TEXT("NewHellwalker"), TEXT("New66") };
-		const int32 I = Menu.FindItem(Ids[FMath::Clamp(Choice, 1, 3) - 1]);
+		const int32 I = Menu.FindItem(Choice == 1 ? HWMenuIds::NewNormal : HWMenuIds::NewAdaptive);
 		if (I != INDEX_NONE) { HandleMenuEvent(Menu.Click(I)); }
 		return;
 	}
 	if (Phase != EHWWorldPhase::Title && Phase != EHWWorldPhase::Ending && Phase != EHWWorldPhase::Regret) { return; }
 	if (Menu.IsOpen()) { return; }
-	GM->NewGame(Choice == 1 ? EHWPlayMode::Pathbreaker : (Choice == 3 ? EHWPlayMode::SixtySixDays : EHWPlayMode::Hellwalker));
+	GM->NewGame(Choice == 1 ? EHWPlayMode::Pathbreaker : EHWPlayMode::Hellwalker);
 }
 
 // ---- handlers ------------------------------------------------------------------------------------

@@ -8,7 +8,9 @@
 
 Reads over the public Firestore REST API (the collection list, pageSize / pageToken - no sign-in needed: players and
 fights are public, web/firebase/firestore.rules). Writes players.csv and fights.csv (UTF-8 with a BOM, so Excel opens
-them right). The survey's free-text comments are private (surveys/{uid}): read them in the Firebase console
+them right). fights.csv has one column set for both fight schemas: a v1 fight (games before 1.4.0) fills the v2 columns
+with what it implied (assist off, slowmoScale 1, keeperDamageScale 1, parryWindowFrames 12) and leaves insight blank;
+the `v` column tells them apart. The survey's free-text comments are private (surveys/{uid}): read them in the Firebase console
 (Firestore -> surveys), or export them with a service account - they are not in these files.
 """
 
@@ -37,6 +39,10 @@ FIGHT_SCALARS = ["v", "player", "at", "clientTime", "session", "fightInSession",
 	"dmgDealt", "dmgTaken", "playerSwings", "playerHits", "keeperSwings", "keeperHits", "keeperBlocked", "keeperParried",
 	"keeperWhiffed", "parryAttempts", "dodges", "guardBreaks", "keeperExposed", "readsLanded", "predictions",
 	"predictionsCorrect", "confident", "confidentCorrect"]
+# Contract v2 (game 1.4.0+). A v1 fight (games before 1.4.0) had no assist, no damage scale and the 12-frame parry
+# window, so its row reads off / 1.0 / 1.0 / 12; its insight is unknown (blank), not 0.
+FIGHT_V2 = ["assist", "slowmoScale", "keeperDamageScale", "parryWindowFrames", "insight"]
+V1_DEFAULTS = {"assist": "off", "slowmoScale": 1.0, "keeperDamageScale": 1.0, "parryWindowFrames": 12, "insight": ""}
 
 
 def plain(v):
@@ -137,6 +143,9 @@ def fight_row(f):
 	for k in FIGHT_SCALARS:
 		v = f.get(k, "")
 		row[k] = int(v) if isinstance(v, bool) else v
+	for k in FIGHT_V2:
+		row[k] = f[k] if k in f else V1_DEFAULTS[k]
+	row["parryRate"] = ratio(f.get("keeperParried", 0), f.get("parryAttempts", 0))
 	row["readAccuracy"] = ratio(f.get("predictionsCorrect", 0), f.get("predictions", 0))
 	a = f.get("answers") or {}
 	for c in CLASSES:
@@ -155,7 +164,7 @@ def fight_row(f):
 def _cell(v):
 	# Spreadsheet formula injection: a nickname or comment starting with = + - @ (or a tab / CR) would run as a formula in
 	# Excel or Sheets; a leading quote keeps it text.
-	if isinstance(v, str) and v[:1] in ("=", "+", "-", "@", "	", ""):
+	if isinstance(v, str) and v[:1] in ("=", "+", "-", "@", "\t", "\r"):
 		return "'" + v
 	return v
 

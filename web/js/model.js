@@ -12,7 +12,7 @@ export const KEEPERS = [
 		evalStat: ["14.6", "feint bites / min"] },
 	{ key: "returned", idx: 2, name: "The Warden, Returned", short: "the Returned", style: "The reader",
 		look: "Reborn in stone, behind the sealed gate.",
-		blurb: "Fast, exact counters. Sealed until the other two fall, it carries everything they learned about you - and always reads you.",
+		blurb: "Fast, exact counters. Sealed until the other two fall; in Adaptive AI it carries everything they learned about you.",
 		evalStat: ["53.2", "READs / min"] },
 ];
 
@@ -22,7 +22,7 @@ export const keeperByIdx = (i) => KEEPERS[i] || null;
 export const ATTACKS = [
 	["fastslash", "a fast slash"], ["sweepleft", "a sweep to your left"], ["sweepright", "a sweep to your right"],
 	["heavycleave", "a heavy cleave"], ["delayedheavy", "a delayed heavy"], ["feint", "a feint"], ["grab", "a grab"],
-	["killer", "the red killer thrust"],
+	["killer", "the killer thrust"],
 ];
 const ATTACK_ALIASES = { fast: "fastslash", bfastslash: "fastslash", bsweepleft: "sweepleft", bsweepright: "sweepright",
 	bheavycleave: "heavycleave", bdelayedheavy: "delayedheavy", feintmid: "feint", bfeintmid: "feint", feintearly: "feint",
@@ -49,7 +49,62 @@ export const answerLabel = (s) => ANSWER_LABELS[norm(s)] || String(s || "?");
 
 export const CLASSES = [["fast", "fast swings"], ["heavy", "heavy swings"], ["feint", "feints"], ["killer", "killer thrusts"]];
 
-export const DIFFICULTY_ORDER = ["Easy", "Normal", "Hard", "Hellwalker", "Adaptive"];
+// ---- the two walks, difficulty, and the v2 fight fields (web/CONTRACT.md) ---------------------------------------------
+
+/** The game's two walks. Telemetry keeps the old names: playMode "pathbreaker" = Normal, "hellwalker" = Adaptive AI. */
+export const WALKS = [
+	{ key: "normal", label: "Normal", line: "The scripted keepers - every one of them. Patterns you can learn." },
+	{ key: "adaptive", label: "Adaptive AI", line: "The keepers driven by the RL brain. They learn you." },
+];
+
+/** "normal" | "adaptive". The retired "66days" walk was an Adaptive AI walk; an arena duel goes by its brain. */
+export function walkOf(f) {
+	const m = f && f.playMode;
+	if (m === "pathbreaker") return "normal";
+	if (m === "hellwalker" || m === "66days") return "adaptive";
+	return f && f.brain === "rl" ? "adaptive" : "normal";
+}
+
+export function walkLabel(f) {
+	const w = walkOf(f) === "adaptive" ? "Adaptive AI" : "Normal";
+	return f && f.playMode === "arena" ? w + " · arena" : w;
+}
+
+/** The difficulties the game offers now; "Adaptive" was retired (old saves load as Normal). */
+export const DIFFICULTIES = ["Easy", "Normal", "Hard", "Hellwalker"];
+export const DIFFICULTY_ORDER = [...DIFFICULTIES, "Adaptive"];
+export const difficultyLabel = (d) => (d === "Adaptive" ? "Adaptive (old)" : d ? String(d) : "—");
+
+/** The parry assist of a fight. v1 fights had none (no field = "off"). */
+export function assistOf(f) {
+	const a = f && typeof f.assist === "string" ? f.assist : "off";
+	if (a === "ring+slowmo") {
+		const s = f && typeof f.slowmoScale === "number" && isFinite(f.slowmoScale) ? f.slowmoScale : null;
+		return { key: a, label: "ring + slow-mo", slowmo: s };
+	}
+	if (a === "ring") return { key: a, label: "ring", slowmo: null };
+	return { key: "off", label: null, slowmo: null };
+}
+
+const num01 = (x, hi = 1) => (typeof x === "number" && isFinite(x) ? Math.max(0, Math.min(hi, x)) : null);
+
+/** The scale on the keeper's hits this fight (v2; null when the fight did not record it). */
+export const keeperDamageOf = (f) => (f ? num01(f.keeperDamageScale, 2) : null);
+
+/** How well the Adaptive AI keeper knew the player going into this fight, 0..1 (v2 RL fights only; else null). */
+export const insightOf = (f) => (f && f.brain === "rl" ? num01(f.insight) : null);
+
+/** The read accuracy of one fight (null without predictions). */
+export const readOf = (f) => (f && f.predictions > 0 ? Math.max(0, Math.min(1, (f.predictionsCorrect || 0) / f.predictions)) : null);
+
+/** A few words for an insight value. */
+export function insightWords(x) {
+	if (x === null || x === undefined) return "";
+	if (x < 0.2) return "a stranger to it";
+	if (x < 0.45) return "it is getting to know you";
+	if (x < 0.7) return "it reads you";
+	return "it knows you";
+}
 
 // ---- derived skills ---------------------------------------------------------------------------------------------------
 
@@ -154,7 +209,7 @@ export const BOARDS = [
 		rows: (ps) => ps.filter((p) => skills(p).wins > 0).sort((a, b) => skills(b).wins - skills(a).wins || (skills(b).winRate || 0) - (skills(a).winRate || 0)),
 		value: (s) => s.wins.toLocaleString("en-US"), detail: (s) => `${s.fights} fights · ${Math.round((s.winRate || 0) * 100)}% won` },
 	{ id: "parry", tab: "Best parry rate", title: "Cleanest parries", col: "Parried",
-		note: `At least ${BOARD_MIN.parry} parry attempts. Parry rate = keeper swings parried / parry presses.`,
+		note: `At least ${BOARD_MIN.parry} parry attempts. Parry rate = keeper swings parried / parry presses. Parries made with the parry assist (the red ring, with or without slow motion) count too.`,
 		rows: (ps) => ps.filter((p) => skills(p).parryN >= BOARD_MIN.parry).sort((a, b) => skills(b).parry - skills(a).parry || skills(b).parryN - skills(a).parryN),
 		value: (s) => Math.round(s.parry * 100) + "%", detail: (s) => `${s.parried} of ${s.parryN} parries` },
 	{ id: "read", tab: "Hardest to read", title: "The unreadable", col: "Read",

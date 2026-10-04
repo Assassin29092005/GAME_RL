@@ -33,13 +33,13 @@ struct HELLWALKERRL_API FHWFightRecord
 	int32 FightInSession = 1;
 	FString GameVersion;
 	FString Mode;                   // openworld | arena
-	FString PlayMode;               // pathbreaker | hellwalker | 66days | arena
+	FString PlayMode;               // pathbreaker ("Normal") | hellwalker ("Adaptive AI") | arena (66days: builds before 1.4.0)
 	FString Brain;                  // rl | script
 	int32 Keeper = 0;
 	FString KeeperName;
-	FString Difficulty;             // Easy | Normal | Hard | Hellwalker | Adaptive
+	FString Difficulty;             // Easy | Normal | Hard | Hellwalker (Adaptive: builds before 1.4.0)
 	float Skill = 1.f;
-	bool bAdaptive = false;
+	bool bAdaptive = false;         // the keeper's skill came from the insight ramp (every RL fight)
 	FString Result;                 // win | loss | timeout | quit
 	float Seconds = 0.f;
 	float PlayerHealth = 1.f, KeeperHealth = 1.f;
@@ -51,10 +51,19 @@ struct HELLWALKERRL_API FHWFightRecord
 	struct FExpected { FString Attack; FString Answer; float P = 0.f; };
 	TArray<FExpected> Expected;     // 8 rows for the RL keeper, empty for the script
 	int32 Answers[4][8] = {};       // [fast, heavy, feint, killer][parry, block, stepL, stepR, stepB, stepF, attack, none]
+	// v2 (1.4.0): how the fight was set up when it began.
+	FString Assist = TEXT("off");   // off | ring | ring+slowmo (the parry assist)
+	float SlowmoScale = 1.f;        // the duel's speed while the ring was lit: 1 unless ring+slowmo
+	float KeeperDamageScale = 1.f;  // the keeper's health damage was multiplied by this (dmgTaken is after it)
+	int32 ParryWindowFrames = 12;   // HW::Move(PParry).Active
+	float Insight = 0.f;            // how well the keeper knew the player, 0..1 (0 for the script)
 };
 
 namespace HWTelemetry
 {
+	/** The fight document's schema version (web/CONTRACT.md; the players document stays at v 1). */
+	constexpr int32 FightSchemaVersion = 2;
+
 	HELLWALKERRL_API extern const TCHAR* const ClassKeys[4];   // fast heavy feint killer
 	HELLWALKERRL_API extern const TCHAR* const AnswerKeys[8];  // parry block stepL stepR stepB stepF attack none
 	HELLWALKERRL_API extern const TCHAR* const KeeperKeys[3];  // warden sage returned
@@ -63,6 +72,8 @@ namespace HWTelemetry
 	HELLWALKERRL_API int32 AnswerColumn(int32 PlayerSym);
 	/** The contract's answer key for a player symbol (e.g. "stepL"; Light/Heavy -> "attack", Neutral/moves -> "none"). */
 	HELLWALKERRL_API FString AnswerKey(HW::ESym Sym);
+	/** The contract's assist key for an assist name: "ring+slowmo" (also "RingSlow", "Ring + slow motion"), "ring", else "off". */
+	HELLWALKERRL_API FString AssistKey(const FString& Name);
 	/** Per-fight notebook changes: Now minus Before, clamped at 0 (a reset notebook starts again from zero). */
 	HELLWALKERRL_API void NotebookDelta(const HW::FRLNotebook& Before, const HW::FRLNotebook& Now, FHWFightRecord& InOut);
 	/** 32 lowercase hex characters. */
@@ -152,6 +163,8 @@ private:
 	UPROPERTY() TObjectPtr<UHWTelemetrySave> Save;
 	bool bEnabled = false;
 	bool bAllowAutoplay = false;
+	/** A development build with no mock endpoint and no -HWTelemetryDev: telemetry is off (the developer's own play). */
+	bool bDevBuildOff = false;
 	FString ApiKey, ProjectId, SiteUrl, Endpoint, GameVersion;
 	FString Session;
 	int32 FightsThisSession = 0;

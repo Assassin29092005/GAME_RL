@@ -8,7 +8,9 @@
 //   Project.HellwalkerRL.Menu.Tutorial        the slide deck opens on Next, turns pages, and ends with SlidesDone
 //   Project.HellwalkerRL.Settings.Bindings    defaults are valid; bind, swap on a clash, refuse reserved / pad keys
 //   Project.HellwalkerRL.Settings.Migration   a save from before the map key loads: Map gets M, or a free key if M was taken
-//   Project.HellwalkerRL.Settings.Data        sanitising clamps; the difficulty -> keeper skill table
+//   Project.HellwalkerRL.Menu.TitleModes      the title offers exactly two new walks: [1] Normal, [2] Adaptive AI
+//   Project.HellwalkerRL.Settings.Data        sanitising clamps (the retired Adaptive -> Normal); default Normal; the presets table
+//   Project.HellwalkerRL.Settings.ParryAssist the assist per setting x difficulty, names, parsing, sanitising
 //   Project.HellwalkerRL.Settings.SaveRoundTrip  a settings save written and read back is the same
 
 #include "Misc/AutomationTest.h"
@@ -218,6 +220,11 @@ bool FHWMenuTutorialTest::RunTest(const FString& Parameters)
 	FTestMenu T;
 	T.Slides = HWTutorial::NumSlides();
 	TestTrue(TEXT("the tutorial has 5-6 slides with text"), T.Slides >= 5 && T.Slides <= 6 && FCString::Strlen(HWTutorial::Slide(0).Body) > 40);
+	FString All;
+	for (int32 I = 0; I < T.Slides; ++I) { All += FString(HWTutorial::Slide(I).Title) + TEXT(" ") + HWTutorial::Slide(I).Body + TEXT(" "); }
+	TestTrue(TEXT("it names both modes"), All.Contains(TEXT("Normal")) && All.Contains(TEXT("Adaptive AI")));
+	TestTrue(TEXT("it says repeating makes it surer and changing makes it learn you again"), All.Contains(TEXT("surer")) && All.Contains(TEXT("learn you again")));
+	TestFalse(TEXT("nothing about 66 Days or the retired Adaptive difficulty"), All.Contains(TEXT("66")) || All.Contains(TEXT("Adaptive changes")));
 	T.Menu.Open(EHWMenuPage::Tutorial);
 	TestTrue(TEXT("the deck opens on Next"), T.Menu.GetSelectedItem() != nullptr && T.Menu.GetSelectedItem()->Id == HWMenuIds::SlideNext && T.Menu.GetSlide() == 0);
 	T.Menu.Adjust(-1);
@@ -229,6 +236,48 @@ bool FHWMenuTutorialTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("Next on the last slide is done"), E.Type == EHWMenuEventType::Activated && E.Id == HWMenuIds::SlidesDone);
 	T.Menu.Adjust(-1);
 	TestEqual(TEXT("left turns back a page"), T.Menu.GetSlide(), T.Slides - 2);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FHWMenuTitleModesTest, "Project.HellwalkerRL.Menu.TitleModes", HWMenuTestFlags)
+
+bool FHWMenuTitleModesTest::RunTest(const FString& Parameters)
+{
+	(void)Parameters;
+	TArray<FHWMenuItem> Items;
+	HWTitle::AddNewWalkItems(Items, FString());
+	TestEqual(TEXT("the title offers exactly two new walks"), Items.Num(), 2);
+	if (Items.Num() != 2) { return false; }
+	TestTrue(TEXT("[1] Normal"), Items[0].Id == HWMenuIds::NewNormal && Items[0].Shortcut == TEXT("1") && Items[0].Label.Contains(TEXT("Normal")));
+	TestTrue(TEXT("[2] Adaptive AI"), Items[1].Id == HWMenuIds::NewAdaptive && Items[1].Shortcut == TEXT("2") && Items[1].Label.Contains(TEXT("Adaptive AI")));
+	TestTrue(TEXT("no save: nothing to confirm"), Items[0].Confirm.IsEmpty() && Items[1].Confirm.IsEmpty());
+	for (const FHWMenuItem& I : Items)
+	{
+		TestFalse(TEXT("no 66 Days, no research names"), I.Label.Contains(TEXT("66")) || I.Hint.Contains(TEXT("66")) || I.Label.Contains(TEXT("Pathbreaker"))
+			|| I.Label.Contains(TEXT("Hellwalker")));
+		TestFalse(TEXT("each explains itself"), I.Hint.IsEmpty());
+	}
+	TArray<FHWMenuItem> WithSave;
+	HWTitle::AddNewWalkItems(WithSave, TEXT("Erase?"));
+	TestTrue(TEXT("a saved walk: both ask first"), WithSave.Num() == 2 && WithSave[0].Confirm == TEXT("Erase?") && WithSave[1].Confirm == TEXT("Erase?"));
+
+	// Through the menu model: the shortcuts' items are found by id, and accepting one asks first when a save would go.
+	FHWMenu Menu;
+	Menu.Builder = [](EHWMenuPage Page, EHWSettingsTab Tab, int32 Slide, TArray<FHWMenuItem>& Out, FHWMenuPageInfo& Info)
+	{
+		(void)Page;
+		(void)Tab;
+		(void)Slide;
+		Info.Title = TEXT("HELLWALKER");
+		HWTitle::AddNewWalkItems(Out, TEXT("Erase?"));
+	};
+	Menu.Open(EHWMenuPage::Title);
+	const int32 Adaptive = Menu.FindItem(HWMenuIds::NewAdaptive);
+	TestTrue(TEXT("[2] is on the page"), Adaptive != INDEX_NONE && Menu.FindItem(HWMenuIds::NewNormal) != INDEX_NONE);
+	const FHWMenuEvent Asked = Menu.Click(Adaptive);
+	TestTrue(TEXT("a new walk over a save asks first"), Asked.Type == EHWMenuEventType::None && Menu.IsConfirming());
+	const FHWMenuEvent Yes = Menu.ClickConfirm(1);
+	TestTrue(TEXT("... and goes on yes"), Yes.Type == EHWMenuEventType::Confirmed && Yes.Id == HWMenuIds::NewAdaptive);
 	return true;
 }
 
@@ -324,22 +373,101 @@ bool FHWSettingsDataTest::RunTest(const FString& Parameters)
 	D.ReadHoldSeconds = 9.f;
 	D.Difficulty = static_cast<EHWDifficulty>(42);
 	D.Sanitize();
-	TestTrue(TEXT("sanitize clamps"), D.MouseSensitivity == FHWSettingsData::MaxSensitivity && D.MasterVolume == 0.f && D.MusicVolume == 1.f
-		&& D.HudScale == FHWSettingsData::MinHudScale && D.ReadHoldSeconds == FHWSettingsData::MaxReadHold && D.Difficulty == EHWDifficulty::Hellwalker);
-	struct FWant { EHWDifficulty D; float Skill; float Temp; bool bAdaptive; };
-	const FWant Table[] = {
-		{ EHWDifficulty::Easy, 0.f, 1.f, false }, { EHWDifficulty::Normal, 0.4f, 0.6f, false }, { EHWDifficulty::Hard, 0.75f, 0.f, false },
-		{ EHWDifficulty::Hellwalker, 1.f, 0.f, false }, { EHWDifficulty::Adaptive, 0.6f, 0.f, true },
-	};
-	for (const FWant& W : Table)
+	TestTrue(TEXT("sanitize clamps (an unknown difficulty plays Normal)"), D.MouseSensitivity == FHWSettingsData::MaxSensitivity && D.MasterVolume == 0.f
+		&& D.MusicVolume == 1.f && D.HudScale == FHWSettingsData::MinHudScale && D.ReadHoldSeconds == FHWSettingsData::MaxReadHold
+		&& D.Difficulty == EHWDifficulty::Normal);
+	TestTrue(TEXT("the default difficulty is Normal, the default assist ring + slow motion"), FHWSettingsData().Difficulty == EHWDifficulty::Normal
+		&& FHWSettingsData().ParryAssist == EHWParryAssist::RingSlow);
+	FHWSettingsData Old;
+	Old.Difficulty = EHWDifficulty::Adaptive;
+	Old.Sanitize();
+	TestTrue(TEXT("the retired Adaptive difficulty sanitises to Normal"), Old.Difficulty == EHWDifficulty::Normal);
+	for (EHWDifficulty Kept : { EHWDifficulty::Easy, EHWDifficulty::Normal, EHWDifficulty::Hard, EHWDifficulty::Hellwalker })
 	{
-		float S = -1.f, T = -1.f;
-		bool bA = false;
-		UHWSettingsSubsystem::KeeperSkillFor(W.D, S, T, bA);
-		TestTrue(FString::Printf(TEXT("%s -> skill %.2f, temperature %.1f"), *UHWSettingsSubsystem::DifficultyName(W.D), W.Skill, W.Temp),
-			FMath::IsNearlyEqual(S, W.Skill) && FMath::IsNearlyEqual(T, W.Temp) && bA == W.bAdaptive);
-		TestFalse(TEXT("each difficulty explains itself"), UHWSettingsSubsystem::DifficultyBlurb(W.D).IsEmpty());
+		FHWSettingsData K;
+		K.Difficulty = Kept;
+		K.Sanitize();
+		TestTrue(FString::Printf(TEXT("%s survives sanitising"), *UHWSettingsSubsystem::DifficultyName(Kept)), K.Difficulty == Kept);
 	}
+
+	// The presets (DESIGN 2): skill range (Adaptive AI), the keeper's damage scale and the assist (both modes).
+	struct FWant { EHWDifficulty D; float Lo; float Hi; float Damage; float Slow; bool bGlow; };
+	const FWant Table[] = {
+		{ EHWDifficulty::Easy,       0.00f, 0.40f, 0.60f, 0.40f, true },
+		{ EHWDifficulty::Normal,     0.00f, 0.70f, 0.75f, 0.60f, false },
+		{ EHWDifficulty::Hard,       0.15f, 0.85f, 0.85f, 0.75f, false },
+		{ EHWDifficulty::Hellwalker, 0.30f, 1.00f, 0.90f, 0.85f, false },
+	};
+	const int32 Rows = static_cast<int32>(UE_ARRAY_COUNT(Table));
+	TestEqual(TEXT("the menu offers Easy .. Hellwalker"), UHWSettingsSubsystem::NumMenuDifficulties, Rows);
+	for (int32 I = 0; I < Rows; ++I)
+	{
+		const FWant& W = Table[I];
+		const FHWDifficultyPreset P = UHWSettingsSubsystem::PresetFor(W.D);
+		TestTrue(FString::Printf(TEXT("%s -> skill %.2f..%.2f, damage x%.2f, slow motion %.2f, glow %d"), *UHWSettingsSubsystem::DifficultyName(W.D), W.Lo, W.Hi,
+			W.Damage, W.Slow, W.bGlow ? 1 : 0), FMath::IsNearlyEqual(P.SkillLo, W.Lo) && FMath::IsNearlyEqual(P.SkillHi, W.Hi)
+			&& FMath::IsNearlyEqual(P.KeeperDamageScale, W.Damage) && FMath::IsNearlyEqual(P.AssistSlowScale, W.Slow) && P.bIncomingGlow == W.bGlow);
+		TestTrue(TEXT("every difficulty is softer than the trained keeper"), P.KeeperDamageScale < 1.f && P.SkillLo < P.SkillHi && P.SkillHi <= 1.f);
+		TestEqual(TEXT("the menu's order is the enum's"), static_cast<int32>(W.D), I);
+		const FString Blurb = UHWSettingsSubsystem::DifficultyBlurb(W.D);
+		TestTrue(TEXT("each difficulty explains itself, with its damage"), !Blurb.IsEmpty()
+			&& Blurb.Contains(FString::Printf(TEXT("%d%%"), FMath::RoundToInt32((1.f - W.Damage) * 100.f))));
+		if (I > 0)
+		{
+			const FHWDifficultyPreset Prev = UHWSettingsSubsystem::PresetFor(Table[I - 1].D);
+			TestTrue(TEXT("each step up hits harder, grows stronger and slows less"), P.KeeperDamageScale > Prev.KeeperDamageScale && P.SkillHi > Prev.SkillHi
+				&& P.AssistSlowScale > Prev.AssistSlowScale);
+		}
+	}
+	const FHWDifficultyPreset Retired = UHWSettingsSubsystem::PresetFor(EHWDifficulty::Adaptive);
+	const FHWDifficultyPreset Normal = UHWSettingsSubsystem::PresetFor(EHWDifficulty::Normal);
+	TestTrue(TEXT("the retired Adaptive gets Normal's numbers"), Retired.SkillLo == Normal.SkillLo && Retired.SkillHi == Normal.SkillHi
+		&& Retired.KeeperDamageScale == Normal.KeeperDamageScale && Retired.AssistSlowScale == Normal.AssistSlowScale);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FHWSettingsParryAssistTest, "Project.HellwalkerRL.Settings.ParryAssist", HWMenuTestFlags)
+
+bool FHWSettingsParryAssistTest::RunTest(const FString& Parameters)
+{
+	(void)Parameters;
+	using S = UHWSettingsSubsystem;
+	for (EHWDifficulty D : { EHWDifficulty::Easy, EHWDifficulty::Normal, EHWDifficulty::Hard, EHWDifficulty::Hellwalker })
+	{
+		const FHWDifficultyPreset P = S::PresetFor(D);
+		const FString Name = S::DifficultyName(D);
+		const FHWAssistParams Slow = S::AssistFor(EHWParryAssist::RingSlow, D);
+		TestTrue(FString::Printf(TEXT("%s, ring + slow motion: the ring, the difficulty's slow motion and glow"), *Name),
+			Slow.bRing && FMath::IsNearlyEqual(Slow.SlowScale, P.AssistSlowScale) && Slow.SlowScale > 0.f && Slow.SlowScale < 1.f && Slow.bIncomingGlow == P.bIncomingGlow);
+		const FHWAssistParams Ring = S::AssistFor(EHWParryAssist::Ring, D);
+		TestTrue(FString::Printf(TEXT("%s, ring only: no slow motion"), *Name), Ring.bRing && Ring.SlowScale == 1.f && Ring.bIncomingGlow == P.bIncomingGlow);
+		const FHWAssistParams Off = S::AssistFor(EHWParryAssist::Off, D);
+		TestTrue(FString::Printf(TEXT("%s, off: no help at all"), *Name), !Off.bRing && !Off.bIncomingGlow && Off.SlowScale == 1.f);
+		TestEqual(TEXT("telemetry: ring+slowmo"), S::AssistTelemetryName(Slow), FString(TEXT("ring+slowmo")));
+		TestEqual(TEXT("telemetry: ring"), S::AssistTelemetryName(Ring), FString(TEXT("ring")));
+		TestEqual(TEXT("telemetry: off"), S::AssistTelemetryName(Off), FString(TEXT("off")));
+	}
+	TestTrue(TEXT("names and blurbs"), [&]()
+	{
+		for (EHWParryAssist A : { EHWParryAssist::RingSlow, EHWParryAssist::Ring, EHWParryAssist::Off })
+		{
+			if (S::ParryAssistName(A).IsEmpty() || S::ParryAssistBlurb(A).IsEmpty()) { return false; }
+		}
+		return S::ParryAssistName(EHWParryAssist::RingSlow) != S::ParryAssistName(EHWParryAssist::Ring);
+	}());
+	EHWParryAssist A = EHWParryAssist::Off;
+	TestTrue(TEXT("-HWParryAssist=RingSlow"), S::ParseParryAssist(TEXT("RingSlow"), A) && A == EHWParryAssist::RingSlow);
+	TestTrue(TEXT("-HWParryAssist=ring (any case)"), S::ParseParryAssist(TEXT("ring"), A) && A == EHWParryAssist::Ring);
+	TestTrue(TEXT("-HWParryAssist=OFF"), S::ParseParryAssist(TEXT("OFF"), A) && A == EHWParryAssist::Off);
+	A = EHWParryAssist::Ring;
+	TestTrue(TEXT("an unknown value is refused and changes nothing"), !S::ParseParryAssist(TEXT("sometimes"), A) && A == EHWParryAssist::Ring);
+	FHWSettingsData D;
+	D.ParryAssist = static_cast<EHWParryAssist>(9);
+	D.Sanitize();
+	TestTrue(TEXT("an unknown assist sanitises to the default"), D.ParryAssist == EHWParryAssist::RingSlow);
+	D.ParryAssist = EHWParryAssist::Off;
+	D.Sanitize();
+	TestTrue(TEXT("Off survives sanitising"), D.ParryAssist == EHWParryAssist::Off);
 	return true;
 }
 
@@ -351,7 +479,8 @@ bool FHWSettingsSaveRoundTripTest::RunTest(const FString& Parameters)
 	const FString Slot = TEXT("HellwalkerRL_Settings_Test");
 	UGameplayStatics::DeleteGameInSlot(Slot, 0);
 	UHWSettingsSave* Out = Cast<UHWSettingsSave>(UGameplayStatics::CreateSaveGameObject(UHWSettingsSave::StaticClass()));
-	Out->Data.Difficulty = EHWDifficulty::Adaptive;
+	Out->Data.Difficulty = EHWDifficulty::Hard;
+	Out->Data.ParryAssist = EHWParryAssist::Ring;
 	Out->Data.MouseSensitivity = 1.75f;
 	Out->Data.bInvertY = true;
 	Out->Data.MusicVolume = 0.3f;
@@ -370,10 +499,20 @@ bool FHWSettingsSaveRoundTripTest::RunTest(const FString& Parameters)
 		const FHWSettingsData& D = In->Data;
 		FHWBindingTable C;
 		C.FromArray(D.Bindings);
-		TestTrue(TEXT("every field survives"), D.Difficulty == EHWDifficulty::Adaptive && FMath::IsNearlyEqual(D.MouseSensitivity, 1.75f) && D.bInvertY
-			&& FMath::IsNearlyEqual(D.MusicVolume, 0.3f) && FMath::IsNearlyEqual(D.HudScale, 1.25f) && FMath::IsNearlyEqual(D.ReadHoldSeconds, 1.2f)
-			&& D.bTutorialSeen && C == B);
+		TestTrue(TEXT("every field survives"), D.Difficulty == EHWDifficulty::Hard && D.ParryAssist == EHWParryAssist::Ring
+			&& FMath::IsNearlyEqual(D.MouseSensitivity, 1.75f) && D.bInvertY && FMath::IsNearlyEqual(D.MusicVolume, 0.3f) && FMath::IsNearlyEqual(D.HudScale, 1.25f)
+			&& FMath::IsNearlyEqual(D.ReadHoldSeconds, 1.2f) && D.bTutorialSeen && C == B);
 	}
+
+	// A save from before 1.4: the retired Adaptive difficulty loads as Normal.
+	UHWSettingsSave* Old = Cast<UHWSettingsSave>(UGameplayStatics::CreateSaveGameObject(UHWSettingsSave::StaticClass()));
+	Old->Data.Difficulty = EHWDifficulty::Adaptive;
+	Old->Data.ParryAssist = EHWParryAssist::Off;
+	TestTrue(TEXT("an old save written"), Old->Write(Slot));
+	UHWSettingsSave* Migrated = UHWSettingsSave::LoadOrNull(Slot);
+	TestTrue(TEXT("Adaptive loads as Normal; the assist survives"), Migrated != nullptr && Migrated->Data.Difficulty == EHWDifficulty::Normal
+		&& Migrated->Data.ParryAssist == EHWParryAssist::Off);
+
 	UGameplayStatics::DeleteGameInSlot(Slot, 0);
 	TestNull(TEXT("an empty slot loads as nothing"), UHWSettingsSave::LoadOrNull(Slot));
 	return true;

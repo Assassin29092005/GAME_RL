@@ -75,6 +75,22 @@ The game can talk to the mock too: `-HWTelemetryEndpoint=http://127.0.0.1:8099` 
    `[HWTelemetry] SiteUrl=`. Push again.
 4. Optional: a custom domain in the service's settings.
 
+## Before distributing a new build: publish the rules first
+
+The rules check every fight's schema, so a game version that sends a new schema needs the new rules **published before
+anyone gets the build**. Game 1.4.0 sends **v2** fights (`web/CONTRACT.md`: five new fields — assist, slowmoScale,
+keeperDamageScale, parryWindowFrames, insight). Before you push a 1.4.0 build to itch.io or hand it to anyone:
+
+1. Firebase console → **Firestore Database → Rules** → replace everything with the contents of
+   `web/firebase/firestore.rules` → **Publish**. (Or, with Node, from `web/firebase/`:
+   `npx firebase-tools deploy --only firestore:rules --project <your-project-id>`.)
+2. Check it: play one duel with the new build and see it on your profile (Firestore → Data → `fights` → the newest
+   document has `v` = 2).
+
+With the old rules every v2 fight is refused: the game retries it, then drops it after the third refusal (its log says
+"refused by the server … three times; dropped") — those fights are lost for good. The v2 rules still accept v1 fights,
+so copies of an older version keep uploading, and their offline queues still get through.
+
 ## 3. itch.io (the download)
 
 The packaged game is ~7.4 GB. itch.io caps upload size by default (on the order of 1 GB per upload); a build this size
@@ -83,7 +99,8 @@ needs the limit raised — write to itch.io support before the first push, and a
 1. https://itch.io → **Upload new project**: kind *Downloadable*, classification *Game*, platform *Windows*; set the page
    to *Draft* until you are ready. Note its address (e.g. `https://yourname.itch.io/hellwalker`).
 2. Install **butler** (itch.io's uploader: https://itch.io/docs/butler/) and log in once: `butler login`.
-3. Build the game (`Tools\Package.bat`), then upload:
+3. Build the game (`Tools\Package.bat`), publish the rules if this version changed them (the section above — 1.4.0
+   does), then upload:
 
    ```bash
    Tools\ItchPush.bat yourname hellwalker
@@ -100,6 +117,11 @@ needs the limit raised — write to itch.io support before the first push, and a
   ```bash
   RL/.venv/Scripts/python.exe web/dev/export.py --project <project-id> --api-key <web-api-key> --out D:/study/export
   ```
+
+  `fights.csv` holds both fight schemas (column `v`): a v1 fight (games before 1.4.0) fills the v2 columns with what
+  it implied — assist `off`, slowmoScale 1, keeperDamageScale 1, parryWindowFrames 12 — and leaves `insight` blank
+  (unknown, not 0). `seconds` is simulated fight time (slow motion does not lengthen it); `parryRate` = keeperParried /
+  parryAttempts per fight.
 
 - The survey's free-text comments are private (`surveys/{uid}`, readable only by that player): read them in the Firebase
   console (Firestore → Data → `surveys`).
@@ -118,8 +140,16 @@ needs the limit raised — write to itch.io support before the first push, and a
 
 ## Testing and safety checks
 
-- `web/dev/e2e_test.py` — 82 checks against the mock: sign-up, uploads (incl. an idempotent retry), profile and
-  leaderboard queries, linking a browser, reset, and the attacks the rules must refuse (another player deleting,
-  overwriting or inflating someone's data; malformed or negative records).
+- **Only the packaged (Shipping) game uploads to your real project.** Development builds — the editor, `Tools\Play.bat`,
+  scripted checks — keep stats sharing off so your own test fights never land in the research data ("Open my stats page"
+  says so). To try the real upload from a development build on purpose, add `-HWTelemetryDev` to its command line. Launches
+  that change the keeper or the rules (`-HWPolicy=`, `-HWMoveAccel=`, `-HWMoveBraking=`, `-HWNoHitstop`) never upload.
+
+- `web/dev/e2e_test.py` — 109 checks against the mock (108 with `--seed 0`): sign-up, uploads (incl. an idempotent
+  retry), profile and leaderboard queries, linking a browser, reset, the fight schema versions (v2 fights with their
+  five fields, a v1 fight from an older build still accepted, the v2 ranges at their edges), and the attacks the rules
+  must refuse (another player deleting, overwriting or inflating someone's data; malformed or negative records, v2
+  fields out of range or under the wrong version). Run it with `--spawn` after changing the mock: without it, it reuses
+  whatever mock is already on port 8099.
 - The mock enforces the same permissions as `web/firebase/firestore.rules`, but it is not Firestore: after publishing
   the rules, play one duel and check the profile appears, and try a reset.

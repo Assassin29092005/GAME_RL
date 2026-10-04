@@ -324,11 +324,18 @@ TOTAL_KEYS = ("fights", "wins", "losses", "timeouts", "seconds", "dmgDealt", "dm
 	"readsLanded", "predictions", "predictionsCorrect", "confident", "confidentCorrect")
 PLAYER_KEYS = ("v", "nickname", "createdAt", "lastSeen", "gameVersion", "difficulty", "totals", "keepers", "answers",
 	"expected", "survey", "resets", "resetAt")
-FIGHT_KEYS = ("v", "player", "at", "clientTime", "session", "fightInSession", "gameVersion", "mode", "playMode", "brain",
+FIGHT_KEYS_V1 = ("v", "player", "at", "clientTime", "session", "fightInSession", "gameVersion", "mode", "playMode", "brain",
 	"keeper", "keeperName", "difficulty", "skill", "adaptive", "result", "seconds", "playerHealth", "keeperHealth",
 	"dmgDealt", "dmgTaken", "playerSwings", "playerHits", "keeperSwings", "keeperHits", "keeperBlocked", "keeperParried",
 	"keeperWhiffed", "parryAttempts", "dodges", "guardBreaks", "keeperExposed", "readsLanded", "predictions",
 	"predictionsCorrect", "confident", "confidentCorrect", "expected", "answers")
+FIGHT_KEYS_V2 = ("v", "player", "at", "clientTime", "session", "fightInSession", "gameVersion", "mode", "playMode", "brain",
+	"keeper", "keeperName", "difficulty", "skill", "adaptive", "result", "seconds", "playerHealth", "keeperHealth",
+	"dmgDealt", "dmgTaken", "playerSwings", "playerHits", "keeperSwings", "keeperHits", "keeperBlocked", "keeperParried",
+	"keeperWhiffed", "parryAttempts", "dodges", "guardBreaks", "keeperExposed", "readsLanded", "predictions",
+	"predictionsCorrect", "confident", "confidentCorrect", "expected", "answers", "assist", "slowmoScale",
+	"keeperDamageScale", "parryWindowFrames", "insight")
+ASSISTS = ("off", "ring", "ring+slowmo")
 SURVEY_KEYS = ("feltRead", "fair", "difficulty", "fun", "playAgain", "noticedAdapting", "at")
 HEX32 = re.compile(r"^[0-9a-f]{32}$")
 
@@ -492,13 +499,32 @@ def player_update_ok(d, old, now):
 		and ("resetAt" not in changed or (is_reset and is_ts(d["resetAt"]) and d["resetAt"] == now)))
 
 
+def assist_ok(f):
+	"""The v2 fields: assist, slow motion (only with the ring), the keeper's damage scale, the parry window, insight."""
+	return (is_str(f["assist"]) and f["assist"] in ASSISTS
+		and is_num(f["slowmoScale"]) and 0 < f["slowmoScale"] <= 1
+		and (f["assist"] == "ring+slowmo" or f["slowmoScale"] == 1)
+		and is_num(f["keeperDamageScale"]) and 0 < f["keeperDamageScale"] <= 2
+		and is_int(f["parryWindowFrames"]) and 1 <= f["parryWindowFrames"] <= 60
+		and frac(f["insight"]))
+
+
+def fight_v1(f):
+	"""v1 (games 1.0.0 - 1.3.0): exactly the 39 v1 keys; accepted forever (offline-queued bodies)."""
+	return has_only(f, FIGHT_KEYS_V1) and has_all(f, FIGHT_KEYS_V1) and num_is(f["v"], 1)
+
+
+def fight_v2(f):
+	"""v2 (games 1.4.0+): the v1 keys and five more, all required."""
+	return has_only(f, FIGHT_KEYS_V2) and has_all(f, FIGHT_KEYS_V2) and num_is(f["v"], 2) and assist_ok(f)
+
+
 def fight_ok(f, now):
 	c = 1000000
 	cnt = ("playerSwings", "playerHits", "keeperSwings", "keeperHits", "keeperBlocked", "keeperParried", "keeperWhiffed",
 		"parryAttempts", "dodges", "guardBreaks", "keeperExposed", "readsLanded", "predictions", "predictionsCorrect",
 		"confident", "confidentCorrect")
-	return (has_only(f, FIGHT_KEYS) and has_all(f, FIGHT_KEYS)
-		and num_is(f["v"], 1)
+	return ((fight_v1(f) or fight_v2(f))
 		and is_ts(f["at"]) and f["at"] == now
 		and is_ts(f["clientTime"])
 		and is_str(f["session"]) and HEX32.match(f["session"]) is not None

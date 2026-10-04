@@ -70,62 +70,85 @@ void UHWSessionSubsystem::LoadPolicy()
 
 void UHWSessionSubsystem::ResetMemory()
 {
-	Memory->Reset();
+	if (Memory.IsValid()) { Memory->Reset(); }
 	Notebook.Reset();
-	AdaptiveSkill = AdaptiveStart;
-	LastAdaptiveChange = 0.f;
-	UE_LOG(LogHellwalkerRL, Log, TEXT("The keepers' memory of you was reset (memory, notebook, adaptive skill)."));
+	Insight.Reset();
+	LastInsightChange = 0.f;
+	LastSkillChange = 0.f;
+	InsightPredictionsSeen = 0;
+	InsightCorrectSeen = 0;
+	UE_LOG(LogHellwalkerRL, Log, TEXT("The keepers' memory of you was reset (memory, notebook, insight)."));
 }
 
-int32 UHWSessionSubsystem::AdaptiveSwingGap(float Skill)
+bool UHWSessionSubsystem::IsParityRun()
 {
-	return Skill < 0.15f ? FMath::RoundToInt(static_cast<float>(HW::RL::EasySwingGap) * (0.15f - FMath::Max(Skill, 0.f)) / 0.15f) : 0;
+	FString Path;
+	return FParse::Value(FCommandLine::Get(), TEXT("-HWParity="), Path) && !Path.IsEmpty();
+}
+
+void UHWSessionSubsystem::KeeperConfigFor(EHWDifficulty Difficulty, const HW::FRLInsight& InInsight, float& OutSkill, float& OutTemperature, int32& OutSwingGap)
+{
+	const FHWDifficultyPreset P = UHWSettingsSubsystem::PresetFor(Difficulty);
+	int32_t Gap = 0;
+	InInsight.KeeperConfig(P.SkillLo, P.SkillHi, OutSkill, OutTemperature, Gap);
+	OutSwingGap = static_cast<int32>(Gap);
 }
 
 void UHWSessionSubsystem::GetKeeperConfig(float& OutSkill, float& OutTemperature, bool& bOutAdaptive, int32& OutSwingGap) const
 {
-	OutSkill = 1.f;
-	OutTemperature = 0.f;
-	bOutAdaptive = false;
-	OutSwingGap = 0;
+	if (IsParityRun())
+	{
+		// What parity has always measured against the simulator: the keeper as trained, greedy, no breather.
+		OutSkill = 1.f;
+		OutTemperature = 0.f;
+		bOutAdaptive = false;
+		OutSwingGap = 0;
+		return;
+	}
+	EHWDifficulty Difficulty = FHWSettingsData().Difficulty; // the default, when there are no settings (tests)
 	if (const UGameInstance* GI = GetGameInstance())
 	{
-		if (const UHWSettingsSubsystem* S = GI->GetSubsystem<UHWSettingsSubsystem>())
-		{
-			S->GetKeeperSkill(OutSkill, OutTemperature, bOutAdaptive);
-			OutSwingGap = UHWSettingsSubsystem::KeeperSwingGapFor(S->GetDifficulty());
-		}
+		if (const UHWSettingsSubsystem* S = GI->GetSubsystem<UHWSettingsSubsystem>()) { Difficulty = S->GetDifficulty(); }
 	}
-	if (bOutAdaptive)
-	{
-		OutSkill = AdaptiveSkill;
-		OutTemperature = AdaptiveTemperature(AdaptiveSkill);
-		OutSwingGap = AdaptiveSwingGap(AdaptiveSkill);
-	}
+	KeeperConfigFor(Difficulty, Insight, OutSkill, OutTemperature, OutSwingGap);
+	bOutAdaptive = true;
 }
 
-float UHWSessionSubsystem::NextAdaptiveSkill(float Skill, bool bPlayerWon, float PlayerHealthFrac, float BossHealthFrac)
+float UHWSessionSubsystem::GetAdaptiveSkill() const
 {
-	float Delta = 0.f;
-	if (bPlayerWon) { Delta = PlayerHealthFrac >= 0.4f ? 0.10f : 0.04f; }   // too easy: it gets sharper
-	else { Delta = BossHealthFrac >= 0.4f ? -0.10f : -0.03f; }             // too hard: it eases off
-	return FMath::Clamp(Skill + Delta, 0.f, 1.f);
+	float Skill = 1.f;
+	float Temperature = 0.f;
+	bool bAdaptive = false;
+	int32 Gap = 0;
+	GetKeeperConfig(Skill, Temperature, bAdaptive, Gap);
+	return Skill;
 }
 
 float UHWSessionSubsystem::RecordFightForAdaptive(bool bPlayerWon, float PlayerHealthFrac, float BossHealthFrac)
 {
-	float Skill = 1.f, Temperature = 0.f;
-	bool bAdaptive = false;
-	int32 Gap = 0;
-	GetKeeperConfig(Skill, Temperature, bAdaptive, Gap);
-	LastAdaptiveChange = 0.f;
-	if (!bAdaptive) { return 0.f; }
-	const float Next = NextAdaptiveSkill(AdaptiveSkill, bPlayerWon, PlayerHealthFrac, BossHealthFrac);
-	LastAdaptiveChange = Next - AdaptiveSkill;
-	UE_LOG(LogHellwalkerRL, Log, TEXT("Adaptive difficulty: %s with %.0f%% / %.0f%% health left -> the keeper's skill %.2f -> %.2f."),
-		bPlayerWon ? TEXT("you won") : TEXT("you lost"), PlayerHealthFrac * 100.f, BossHealthFrac * 100.f, AdaptiveSkill, Next);
-	AdaptiveSkill = Next;
-	return LastAdaptiveChange;
+	// This fight's read-head calls on the keeper's ATTACKS (how you answer a swing — what FRLInsight was tuned on, ThesisSim
+	// --arc) = what the notebook's swing totals gained since the last record (FRLBrain::FlushNotebook has written the fight's
+	// last answer by now). The totals rather than per-fight slots: those stop at FRLNotebook::MaxFights, and calls from an
+	// abandoned fight (a restart) still say how well it reads you.
+	if (Notebook.SwingPredictions < InsightPredictionsSeen || Notebook.SwingCorrect < InsightCorrectSeen)
+	{
+		InsightPredictionsSeen = 0; // the notebook was reset under us
+		InsightCorrectSeen = 0;
+	}
+	const int32 Predictions = Notebook.SwingPredictions - InsightPredictionsSeen;
+	const int32 Correct = FMath::Clamp(Notebook.SwingCorrect - InsightCorrectSeen, 0, Predictions);
+	InsightPredictionsSeen = Notebook.SwingPredictions;
+	InsightCorrectSeen = Notebook.SwingCorrect;
+
+	const float SkillBefore = GetAdaptiveSkill();
+	const float Before = Insight.Insight;
+	Insight.AfterFight(Predictions, Correct);
+	LastInsightChange = Insight.Insight - Before;
+	LastSkillChange = GetAdaptiveSkill() - SkillBefore;
+	UE_LOG(LogHellwalkerRL, Log, TEXT("Insight: %s (%.0f%% / %.0f%% health left); it called %d of your %d answers -> insight %.2f -> %.2f, the next fight's skill %.2f."),
+		bPlayerWon ? TEXT("you won") : TEXT("you lost"), PlayerHealthFrac * 100.f, BossHealthFrac * 100.f, Correct, Predictions, Before, Insight.Insight,
+		SkillBefore + LastSkillChange);
+	return LastInsightChange;
 }
 
 bool UHWSessionSubsystem::PredictAnswer(HW::EMoveId Move, HW::ESym& OutSym, float& OutP) const
@@ -148,5 +171,6 @@ FString UHWSessionSubsystem::TierLabel(EHWTier InTier) const
 	{
 		return InTier == BlindVariantA ? TEXT("VARIANT A") : TEXT("VARIANT B");
 	}
-	return InTier == EHWTier::Hellwalker ? TEXT("HELLWALKER") : TEXT("PATHBREAKER");
+	// The modes' display names (the enum keeps the research names: Pathbreaker = the script, Hellwalker = the RL keeper).
+	return InTier == EHWTier::Hellwalker ? TEXT("ADAPTIVE AI") : TEXT("NORMAL");
 }

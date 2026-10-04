@@ -3,7 +3,9 @@
 // Player / boss health and sha-chi, the tier, the Read Meter (PLAN §2.4: the boss's top-1 predicted
 // player action with a confidence bar, flashed immediately AFTER a model-driven counter lands —
 // testimony, not telegraph; held for the player's "READ banner hold" setting), impact flashes, the killer-move
-// telegraph marker, start / end screens, the A2 numeric overlay (F3) that the CSV must reconcile against — and the
+// telegraph marker (VIOLET: red means only "parry now"), the parry assist's ring (HWParryAssist.h: red round the keeper's
+// weapon hand(s) exactly while a parry pressed now would land), start / end screens with how well the keeper knows you
+// (Adaptive AI's insight), the A2 numeric overlay (F3) that the CSV must reconcile against — and the
 // menus (title, pause, settings, the tutorial, the keeper's notebook, the valley map), drawn from AHWPlayerController's
 // FHWMenu with mouse hit boxes ("M:I:<row>" and friends, see AHWPlayerController::MenuPointer).
 //
@@ -54,6 +56,12 @@ private:
 	void DrawBars(UHWDuelSubsystem* Duel);
 	void DrawReadMeter(UHWDuelSubsystem* Duel);
 	void DrawWorldMarkers(UHWDuelSubsystem* Duel);
+	/**
+	 * The parry assist (the fight's FHWAssistParams, the duel's FHWParryCue): lit = a bold red ring round the keeper's weapon
+	 * hand(s), shrinking as the window closes, brightest its last 4 frames, the parry key under it; grey = the window is
+	 * open but you cannot get a parry out in time; Easy's incoming glow = a faint thin ring from the commit (no timing).
+	 */
+	void DrawParryCue(UHWDuelSubsystem* Duel);
 	void DrawOverlay(UHWDuelSubsystem* Duel);
 	void DrawStartScreen(UHWDuelSubsystem* Duel);
 	void DrawEndScreen(UHWDuelSubsystem* Duel);
@@ -84,7 +92,8 @@ private:
 	void DrawMapMenu(AHWPlayerController* PC, const FHWMenu& M);
 	/** The map picture as a texture, made once from AHWOpenWorld::GetMapPicture (null until the picture is ready). */
 	UTexture2D* GetMapTexture(const AHWOpenWorldGameMode* GM);
-	/** One line from the notebook (and the adaptive change) on the duel result / end screens. */
+	/** One line from the notebook and how well it knows you now (Adaptive AI's insight, and the fight's change) on the duel
+	 *  result / end screens. */
 	void DrawNotebookLine(UHWDuelSubsystem* Duel, float CX, float Y);
 	void DrawConfirm(AHWPlayerController* PC, const FHWMenu& M);
 	void DrawCapture(AHWPlayerController* PC, const FHWMenu& M);

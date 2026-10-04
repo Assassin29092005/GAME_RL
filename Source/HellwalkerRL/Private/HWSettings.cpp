@@ -1,5 +1,4 @@
 #include "HWSettings.h"
-#include "HWCore/HWRLTypes.h"
 
 #include "HellwalkerRL.h"
 #include "AudioDevice.h"
@@ -32,9 +31,8 @@ namespace
 			{ EKeys::D, TEXT("W A S D move") },
 			{ EKeys::Escape, TEXT("Esc is fixed: it opens the menu and cancels") },
 			{ EKeys::Enter, TEXT("Enter is the menus' accept key") },
-			{ EKeys::One, TEXT("1 picks Pathbreaker (title, arena)") },
-			{ EKeys::Two, TEXT("2 picks Hellwalker (title, arena)") },
-			{ EKeys::Three, TEXT("3 picks 66 Days (title)") },
+			{ EKeys::One, TEXT("1 and 2 pick the mode (title, arena)") },
+			{ EKeys::Two, TEXT("1 and 2 pick the mode (title, arena)") },
 			{ EKeys::Tilde, TEXT("the console key") },
 			{ EKeys::MouseScrollUp, TEXT("the wheel scrolls the menus") },
 			{ EKeys::MouseScrollDown, TEXT("the wheel scrolls the menus") },
@@ -353,7 +351,9 @@ void FHWBindingTable::FromArray(const TArray<FHWKeyBinding>& In)
 
 void FHWSettingsData::Sanitize()
 {
-	if (static_cast<uint8>(Difficulty) > static_cast<uint8>(EHWDifficulty::Adaptive)) { Difficulty = EHWDifficulty::Hellwalker; }
+	// The retired Adaptive difficulty (and anything unknown) plays Normal; an unknown assist is the default.
+	if (static_cast<uint8>(Difficulty) >= static_cast<uint8>(EHWDifficulty::Adaptive)) { Difficulty = EHWDifficulty::Normal; }
+	if (static_cast<uint8>(ParryAssist) > static_cast<uint8>(EHWParryAssist::Off)) { ParryAssist = EHWParryAssist::RingSlow; }
 	auto Fix = [](float& V, float Lo, float Hi, float Default) { V = FMath::IsFinite(V) ? FMath::Clamp(V, Lo, Hi) : Default; };
 	Fix(MouseSensitivity, MinSensitivity, MaxSensitivity, 1.f);
 	Fix(MasterVolume, 0.f, 1.f, 1.f);
@@ -396,14 +396,38 @@ void UHWSettingsSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 	if (FParse::Value(FCommandLine::Get(), TEXT("-HWDifficulty="), Forced))
 	{
 		// Scripted runs (parity, demos): a fixed difficulty, whatever the save holds; never written back.
-		for (EHWDifficulty D : { EHWDifficulty::Easy, EHWDifficulty::Normal, EHWDifficulty::Hard, EHWDifficulty::Hellwalker, EHWDifficulty::Adaptive })
+		bool bKnown = false;
+		for (int32 I = 0; I < NumMenuDifficulties; ++I)
 		{
-			if (Forced.Equals(DifficultyName(D), ESearchCase::IgnoreCase)) { Data.Difficulty = D; bPersist = false; }
+			const EHWDifficulty D = static_cast<EHWDifficulty>(I);
+			if (Forced.Equals(DifficultyName(D), ESearchCase::IgnoreCase)) { Data.Difficulty = D; bPersist = false; bKnown = true; }
+		}
+		if (!bKnown && Forced.Equals(TEXT("Adaptive"), ESearchCase::IgnoreCase))
+		{
+			UE_LOG(LogHellwalkerRL, Warning, TEXT("Settings: -HWDifficulty=Adaptive is retired (Adaptive AI now learns at every difficulty): playing Normal."));
+			Data.Difficulty = EHWDifficulty::Normal;
+			bPersist = false;
+		}
+	}
+	if (FParse::Value(FCommandLine::Get(), TEXT("-HWParryAssist="), Forced))
+	{
+		// Like -HWDifficulty: this session only, and it also holds in scripted launches (which otherwise play without it).
+		EHWParryAssist A = EHWParryAssist::RingSlow;
+		if (ParseParryAssist(Forced, A))
+		{
+			Data.ParryAssist = A;
+			bParryAssistOverride = true;
+			bPersist = false;
+		}
+		else
+		{
+			UE_LOG(LogHellwalkerRL, Warning, TEXT("Settings: -HWParryAssist=%s is not RingSlow, Ring or Off: ignored."), *Forced);
 		}
 	}
 	ApplyAll();
-	UE_LOG(LogHellwalkerRL, Log, TEXT("Settings: difficulty %s, HUD %.0f%%, READ hold %.1f s, master %.0f%%%s."), *DifficultyName(Data.Difficulty),
-		Data.HudScale * 100.f, Data.ReadHoldSeconds, Data.MasterVolume * 100.f, bPersist ? TEXT("") : TEXT(" (not saved: -HWNoSave)"));
+	UE_LOG(LogHellwalkerRL, Log, TEXT("Settings: difficulty %s, parry assist %s%s, HUD %.0f%%, READ hold %.1f s, master %.0f%%%s."), *DifficultyName(Data.Difficulty),
+		*ParryAssistName(Data.ParryAssist), bParryAssistOverride ? TEXT(" (-HWParryAssist)") : TEXT(""), Data.HudScale * 100.f, Data.ReadHoldSeconds,
+		Data.MasterVolume * 100.f, bPersist ? TEXT("") : TEXT(" (not saved: -HWNoSave / a command-line override)"));
 }
 
 void UHWSettingsSubsystem::ApplyAll()
@@ -436,28 +460,27 @@ void UHWSettingsSubsystem::Changed()
 	Save();
 }
 
-void UHWSettingsSubsystem::KeeperSkillFor(EHWDifficulty D, float& OutSkill, float& OutTemperature, bool& bOutAdaptive)
+FHWDifficultyPreset UHWSettingsSubsystem::PresetFor(EHWDifficulty D)
 {
-	bOutAdaptive = false;
+	// Every difficulty is softer than the network trained (skill 1, damage x1); even Hellwalker starts at skill 0.3 and
+	// only reaches full strength once the insight ramp says it knows you.
+	FHWDifficultyPreset P;
 	switch (D)
 	{
-	case EHWDifficulty::Easy:     OutSkill = 0.f;   OutTemperature = 1.f; break;
-	case EHWDifficulty::Normal:   OutSkill = 0.4f;  OutTemperature = 0.6f; break;
-	case EHWDifficulty::Hard:     OutSkill = 0.75f; OutTemperature = 0.f; break;
-	case EHWDifficulty::Adaptive: OutSkill = 0.6f;  OutTemperature = 0.f; bOutAdaptive = true; break;
-	default:                      OutSkill = 1.f;   OutTemperature = 0.f; break;
+	case EHWDifficulty::Easy:
+		P.SkillLo = 0.f;   P.SkillHi = 0.4f;  P.KeeperDamageScale = 0.6f;  P.AssistSlowScale = 0.4f;  P.bIncomingGlow = true;
+		break;
+	case EHWDifficulty::Hard:
+		P.SkillLo = 0.15f; P.SkillHi = 0.85f; P.KeeperDamageScale = 0.85f; P.AssistSlowScale = 0.75f; P.bIncomingGlow = false;
+		break;
+	case EHWDifficulty::Hellwalker:
+		P.SkillLo = 0.3f;  P.SkillHi = 1.f;   P.KeeperDamageScale = 0.9f;  P.AssistSlowScale = 0.85f; P.bIncomingGlow = false;
+		break;
+	default: // Normal, and the retired Adaptive
+		P.SkillLo = 0.f;   P.SkillHi = 0.7f;  P.KeeperDamageScale = 0.75f; P.AssistSlowScale = 0.6f;  P.bIncomingGlow = false;
+		break;
 	}
-}
-
-int32 UHWSettingsSubsystem::KeeperSwingGapFor(EHWDifficulty D)
-{
-	// The same network at skill 0 still out-hits the script; Easy also spaces its attacks out (a breath for you).
-	return D == EHWDifficulty::Easy ? HW::RL::EasySwingGap : 0;
-}
-
-void UHWSettingsSubsystem::GetKeeperSkill(float& OutSkill, float& OutTemperature, bool& bOutAdaptive) const
-{
-	KeeperSkillFor(Data.Difficulty, OutSkill, OutTemperature, bOutAdaptive);
+	return P;
 }
 
 FString UHWSettingsSubsystem::DifficultyName(EHWDifficulty D)
@@ -467,24 +490,77 @@ FString UHWSettingsSubsystem::DifficultyName(EHWDifficulty D)
 	case EHWDifficulty::Easy:     return TEXT("Easy");
 	case EHWDifficulty::Normal:   return TEXT("Normal");
 	case EHWDifficulty::Hard:     return TEXT("Hard");
-	case EHWDifficulty::Adaptive: return TEXT("Adaptive");
+	case EHWDifficulty::Adaptive: return TEXT("Adaptive"); // retired: never offered, sanitised to Normal on load
 	default:                      return TEXT("Hellwalker");
 	}
 }
 
 FString UHWSettingsSubsystem::DifficultyBlurb(EHWDifficulty D)
 {
+	const FHWDifficultyPreset P = PresetFor(D);
+	const int32 Softer = FMath::RoundToInt32((1.f - P.KeeperDamageScale) * 100.f);
+	const int32 Speed = FMath::RoundToInt32(P.AssistSlowScale * 100.f);
+	const TCHAR* How = nullptr;
 	switch (D)
 	{
-	case EHWDifficulty::Easy:     return TEXT("It sees you later, strikes once at a time, sometimes guesses, and gives you a breath between attacks.");
-	case EHWDifficulty::Normal:   return TEXT("It sees you a little late and keeps its strings short.");
-	case EHWDifficulty::Hard:     return TEXT("Quick eyes and long strings, a step short of full strength.");
-	case EHWDifficulty::Adaptive: return TEXT("It adjusts its strength between fights to keep them close.");
-	default:                      return TEXT("Full strength - the tier the tests grade.");
+	case EHWDifficulty::Easy:       How = TEXT("In Adaptive AI it starts out guessing and never gets past a beginner's eye."); break;
+	case EHWDifficulty::Hard:       How = TEXT("In Adaptive AI it starts out guessing, but from a sharper eye, and climbs higher as it learns you."); break;
+	case EHWDifficulty::Hellwalker: How = TEXT("In Adaptive AI it starts out guessing, from its sharpest eye, and nears full strength once it knows you."); break;
+	default:                        How = TEXT("In Adaptive AI it starts out guessing and sharpens as it learns you."); break;
+	}
+	return FString::Printf(TEXT("Its hits land %d%% softer.  %s  Parry assist: a red ring when a parry would land, slow motion to %d%% speed%s."), Softer, How, Speed,
+		P.bIncomingGlow ? TEXT(", and its attacks glow as they come") : TEXT(""));
+}
+
+FHWAssistParams UHWSettingsSubsystem::AssistFor(EHWParryAssist A, EHWDifficulty D)
+{
+	FHWAssistParams Out;
+	if (A == EHWParryAssist::Off) { return Out; } // no help at all
+	const FHWDifficultyPreset P = PresetFor(D);
+	Out.bRing = true;
+	Out.bIncomingGlow = P.bIncomingGlow;
+	Out.SlowScale = A == EHWParryAssist::RingSlow ? FMath::Clamp(P.AssistSlowScale, 0.05f, 1.f) : 1.f;
+	return Out;
+}
+
+FString UHWSettingsSubsystem::ParryAssistName(EHWParryAssist A)
+{
+	switch (A)
+	{
+	case EHWParryAssist::Ring: return TEXT("Ring only");
+	case EHWParryAssist::Off:  return TEXT("Off");
+	default:                   return TEXT("Ring + slow motion");
 	}
 }
 
+FString UHWSettingsSubsystem::ParryAssistBlurb(EHWParryAssist A)
+{
+	switch (A)
+	{
+	case EHWParryAssist::Ring: return TEXT("A red ring lights on the keeper's weapon exactly while a parry would land.  Grey: too late to act.");
+	case EHWParryAssist::Off:  return TEXT("No help: read the swing yourself.");
+	default:                   return TEXT("A red ring lights on the keeper's weapon exactly while a parry would land, and the fight slows down while it is lit "
+		"(how much: the difficulty).  Grey: too late to act.");
+	}
+}
+
+FString UHWSettingsSubsystem::AssistTelemetryName(const FHWAssistParams& P)
+{
+	if (!P.bRing) { return TEXT("off"); }
+	return P.SlowScale < 1.f ? TEXT("ring+slowmo") : TEXT("ring");
+}
+
+bool UHWSettingsSubsystem::ParseParryAssist(const FString& S, EHWParryAssist& Out)
+{
+	const FString L = S.TrimStartAndEnd().ToLower();
+	if (L == TEXT("ringslow") || L == TEXT("ring+slowmo") || L == TEXT("slow")) { Out = EHWParryAssist::RingSlow; return true; }
+	if (L == TEXT("ring")) { Out = EHWParryAssist::Ring; return true; }
+	if (L == TEXT("off") || L == TEXT("none")) { Out = EHWParryAssist::Off; return true; }
+	return false;
+}
+
 void UHWSettingsSubsystem::SetDifficulty(EHWDifficulty D) { Data.Difficulty = D; Changed(); }
+void UHWSettingsSubsystem::SetParryAssist(EHWParryAssist A) { Data.ParryAssist = A; Changed(); }
 void UHWSettingsSubsystem::SetMouseSensitivity(float V) { Data.MouseSensitivity = V; Changed(); }
 void UHWSettingsSubsystem::SetInvertY(bool b) { Data.bInvertY = b; Changed(); }
 void UHWSettingsSubsystem::SetMasterVolume(float V) { Data.MasterVolume = V; Changed(); ApplyAudio(); }

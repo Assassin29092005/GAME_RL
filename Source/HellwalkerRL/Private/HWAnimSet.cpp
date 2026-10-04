@@ -259,6 +259,7 @@ UHWAnimSet* UHWAnimSet::Load(UObject* Outer, FName CastName)
 	Set->TrailColor = Spec->TrailColor;
 	Set->TrailWidth = Spec->TrailWidth;
 	Set->TrailSockets = Spec->TrailSockets;
+	Set->TelegraphSockets = Spec->TelegraphSockets;
 	const float Height = RefHeight(*Mesh);
 	Set->MeshScale = Height > 1.f ? Spec->Height / Height : 1.f;
 	if (!Spec->LookMeshPath.IsEmpty())

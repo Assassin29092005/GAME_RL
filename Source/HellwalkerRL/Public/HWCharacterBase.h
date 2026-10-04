@@ -3,8 +3,9 @@
 // Phases A-B need no art (PLAN §4): each fighter is engine basic shapes on the capsule, posed every
 // render frame from its core combat state. The pose IS the frame data — wind-up during startup, the
 // strike across the active frames, the return during recovery — so what the player reads on screen is
-// exactly what the rules will resolve (legibility, PLAN §2.4a). Colour carries the rest: the red
-// killer-move telegraph, blue guard, orange hyper-armor, white parry flash, yellow exposure.
+// exactly what the rules will resolve (legibility, PLAN §2.4a). Colour carries the rest: the violet
+// killer-move telegraph (red is kept for the parry assist's "parry now" ring), blue guard, orange hyper-armor, white
+// parry flash, yellow exposure.
 //
 // C2: when the fighter's cast is in the project (HWAnimCasts.cpp), the same frame state drives a
 // skeletal mesh instead (FHWAnimDriver -> UHWAnimInstance), the colours become an additive overlay on
@@ -61,6 +62,9 @@ public:
 
 	/** Where the blade tip is right now (presentation: sparks, trails). */
 	FVector GetBladeTip() const;
+	/** Where the weapon hand(s) are right now, for the parry assist's ring: the cast's telegraph sockets on the drawn mesh
+	 *  (else the driver), else the blade tip; the greybox: its blade. Never empty. */
+	void GetTelegraphPoints(TArray<FVector>& Out) const;
 	/** The skeletal mesh actually drawn (a cast's retargeted look, else the driver). */
 	USkeletalMeshComponent* GetDrawnMesh() const { return CastLook != nullptr ? CastLook.Get() : GetMesh(); }
 
@@ -146,7 +150,7 @@ protected:
 	/** The telegraph colour on the Thornblades: an additive rim over the sword's own material. */
 	UPROPERTY() TObjectPtr<UMaterialInstanceDynamic> BladeGlowMID;
 	TArray<FTransform> HandWeaponOffsets;
-	/** Slash trails (Slash Trail FX pack): on over each attack's active frames, red for killer moves. */
+	/** Slash trails (Slash Trail FX pack): on over each attack's active frames, violet for killer moves. */
 	UPROPERTY() TArray<TObjectPtr<UNiagaraComponent>> Trails;
 	FHWAnimDriver AnimDriver;
 	FHWAnimFrame AnimFrame;

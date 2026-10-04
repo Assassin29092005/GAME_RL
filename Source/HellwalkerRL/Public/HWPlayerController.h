@@ -136,6 +136,7 @@ private:
 	void OnNotebook();
 	void OnMap();
 	void OnInteract();
+	/** The title's / an ending's mode keys: 1 = a new walk in Normal, 2 = in Adaptive AI. */
 	void OnChoice(int32 Choice);
 	/** COMBAT or EXPLORE mappings for the current pawn (+ MENU while a menu is open). */
 	void ApplyInputMode();
@@ -209,7 +210,6 @@ private:
 	UPROPERTY() TObjectPtr<UInputAction> IA_Map;
 	UPROPERTY() TObjectPtr<UInputAction> IA_Choice1;
 	UPROPERTY() TObjectPtr<UInputAction> IA_Choice2;
-	UPROPERTY() TObjectPtr<UInputAction> IA_Choice3;
 	UPROPERTY() TObjectPtr<UInputMappingContext> MenuContext;
 	UPROPERTY() TObjectPtr<UInputAction> IA_MenuUp;
 	UPROPERTY() TObjectPtr<UInputAction> IA_MenuDown;

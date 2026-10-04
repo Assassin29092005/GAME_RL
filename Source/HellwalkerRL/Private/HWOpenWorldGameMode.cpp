@@ -67,15 +67,7 @@ namespace
 		return false;
 	}
 
-	FString ModeName(EHWPlayMode M)
-	{
-		switch (M)
-		{
-		case EHWPlayMode::Pathbreaker: return TEXT("Pathbreaker");
-		case EHWPlayMode::SixtySixDays: return TEXT("66 Days");
-		default: return TEXT("Hellwalker");
-		}
-	}
+	FString ModeName(EHWPlayMode M) { return PlayModeName(M); }
 }
 
 AHWOpenWorldGameMode::AHWOpenWorldGameMode()
@@ -200,7 +192,11 @@ void AHWOpenWorldGameMode::StartPlay()
 	else if (FParse::Value(Cmd, TEXT("HWWorldMode="), Value))
 	{
 		const FString L = Value.ToLower();
-		NewGame(L == TEXT("pathbreaker") ? EHWPlayMode::Pathbreaker : (L.StartsWith(TEXT("66")) ? EHWPlayMode::SixtySixDays : EHWPlayMode::Hellwalker));
+		if (L.StartsWith(TEXT("66")))
+		{
+			UE_LOG(LogHellwalkerRL, Warning, TEXT("-HWWorldMode=%s: 66 Days is retired; starting Adaptive AI."), *Value);
+		}
+		NewGame((L == TEXT("pathbreaker") || L == TEXT("normal")) ? EHWPlayMode::Pathbreaker : EHWPlayMode::Hellwalker);
 	}
 	if (FParse::Value(Cmd, TEXT("HWGoto="), Value)) { TeleportExplorer(FName(*Value)); }
 	if (FParse::Param(Cmd, TEXT("HWTour")) && OpenWorld != nullptr)
@@ -393,6 +389,7 @@ void AHWOpenWorldGameMode::RetireExplorer()
 
 void AHWOpenWorldGameMode::NewGame(EHWPlayMode Mode)
 {
+	if (Mode == EHWPlayMode::SixtySixDays) { Mode = EHWPlayMode::Hellwalker; } // retired: Adaptive AI without the lives
 	UHWSaveGame::Erase();
 	Save = UHWSaveGame::NewGame(Mode);
 	PickedKeeper = -1;
@@ -401,8 +398,8 @@ void AHWOpenWorldGameMode::NewGame(EHWPlayMode Mode)
 	bSaveExists = true;
 	RefreshSites();
 	SetPhase(EHWWorldPhase::Exploring);
-	SpawnAtStart(Mode == EHWPlayMode::SixtySixDays ? TEXT("66 days remain") : ModeName(Mode));
-	UE_LOG(LogHellwalkerRL, Log, TEXT("New game: %s."), *ModeName(Mode));
+	SpawnAtStart(ModeName(Mode));
+	UE_LOG(LogHellwalkerRL, Log, TEXT("New game: %s (%s)."), *ModeName(Mode), Mode == EHWPlayMode::Pathbreaker ? TEXT("every keeper scripted") : TEXT("the keepers learn you"));
 }
 
 bool AHWOpenWorldGameMode::ContinueGame()
@@ -415,7 +412,7 @@ bool AHWOpenWorldGameMode::ContinueGame()
 	SetPhase(Save->bFinished ? EHWWorldPhase::Ending : EHWWorldPhase::Exploring);
 	if (Phase == EHWWorldPhase::Exploring)
 	{
-		SpawnAtStart(Save->Mode == EHWPlayMode::SixtySixDays ? FString::Printf(TEXT("%d days remain"), Save->DaysLeft) : ModeName(Save->Mode));
+		SpawnAtStart(ModeName(Save->Mode));
 	}
 	return true;
 }
@@ -483,9 +480,9 @@ void AHWOpenWorldGameMode::BeginDuel(int32 ShrineIndex)
 	Boss->CastOverride = Spec.Cast;
 	UGameplayStatics::FinishSpawningActor(Boss, BossAt);
 
-	// The final shrine always reads you — that is the point of it. Pathbreaker's others keep their script.
+	// The mode picks the brain for every shrine, the final one too: Normal = the script, Adaptive AI = the RL keeper.
 	// Register the duel BEFORE possessing: the controller picks combat input and lock-on from it.
-	const EHWTier Tier = (Save->Mode == EHWPlayMode::Pathbreaker && !Spec.bFinal) ? EHWTier::Pathbreaker : EHWTier::Hellwalker;
+	const EHWTier Tier = Save->Mode == EHWPlayMode::Pathbreaker ? EHWTier::Pathbreaker : EHWTier::Hellwalker;
 	Duel->BossTitle = Spec.Title;
 	Duel->ConfigureBoss(Spec.Script, Spec.HealthScale, Spec.bFinal ? 2 : (Spec.Script == 1 ? 1 : 0)); // Warden, Sage, the Returned
 	Duel->SetArenaSpawns(Shrine->PlayerSpawn(), Shrine->BossSpawn(), Yaw);
@@ -499,7 +496,8 @@ void AHWOpenWorldGameMode::BeginDuel(int32 ShrineIndex)
 	SetPhase(EHWWorldPhase::Duel);
 	Prompt.Reset();
 	Banner(Spec.Title.ToUpper(), Spec.Epithet, 3.5f);
-	UE_LOG(LogHellwalkerRL, Log, TEXT("Duel at %s: %s (%s)."), *Spec.Id.ToString(), *Spec.Title, Tier == EHWTier::Hellwalker ? TEXT("reads you") : TEXT("scripted"));
+	UE_LOG(LogHellwalkerRL, Log, TEXT("Duel at %s: %s (%s: %s)."), *Spec.Id.ToString(), *Spec.Title, *ModeName(Save->Mode),
+		Tier == EHWTier::Hellwalker ? TEXT("reads you") : TEXT("scripted"));
 }
 
 void AHWOpenWorldGameMode::OnEncounterEnded(bool bPlayerWon)
@@ -555,24 +553,11 @@ void AHWOpenWorldGameMode::FinishDuel()
 		return;
 	}
 
-	// Death: you wake at your bell. In 66 Days, a day passes; when the last one does, it is over.
+	// Death: you wake at your bell (no lives, no permadeath).
 	++Save->Deaths;
-	if (Save->Mode == EHWPlayMode::SixtySixDays)
-	{
-		--Save->DaysLeft;
-		if (Save->DaysLeft <= 0)
-		{
-			if (!bNoSave) { UHWSaveGame::Erase(); }
-			bSaveExists = false;
-			SetPhase(EHWWorldPhase::Regret);
-			if (TitleCamera != nullptr && Controller != nullptr) { Controller->SetViewTarget(TitleCamera); }
-			return;
-		}
-	}
 	WriteSave();
 	SetPhase(EHWWorldPhase::Exploring);
-	SpawnAtStart(Save->Mode == EHWPlayMode::SixtySixDays ? FString::Printf(TEXT("A day has passed. %d remain."), Save->DaysLeft)
-		: TEXT("You wake again."));
+	SpawnAtStart(TEXT("You wake again."));
 }
 
 int32 AHWOpenWorldGameMode::NextShrine() const
@@ -722,7 +707,10 @@ FString AHWOpenWorldGameMode::ObjectiveText() const
 	if (Save == nullptr) { return FString(); }
 	int32 Cleared = 0;
 	for (int32 I = 0; I < Shrines.Num(); ++I) { Cleared += Save->IsShrineCleared(I) ? 1 : 0; }
-	if (Cleared >= Shrines.Num() - 1 && Shrines.Num() > 0) { return TEXT("The Hell Gate is open. The Warden waits, remembering."); }
+	if (Cleared >= Shrines.Num() - 1 && Shrines.Num() > 0)
+	{
+		return Save->Mode == EHWPlayMode::Pathbreaker ? TEXT("The Hell Gate is open. The Warden waits.") : TEXT("The Hell Gate is open. The Warden waits, remembering.");
+	}
 	return FString::Printf(TEXT("Break the seals  %d / %d"), Cleared, FMath::Max(0, Shrines.Num() - 1));
 }
 

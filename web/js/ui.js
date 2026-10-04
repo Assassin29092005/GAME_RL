@@ -1,4 +1,4 @@
-// HELLWALKER site - small DOM helpers: escaped HTML templates, number formats, animated bars, emblems.
+// HELLWALKER site - small DOM helpers: escaped HTML templates, number formats, animated bars, emblems, the line chart.
 // Pages build HTML strings with h`...` (every interpolated value is escaped unless wrapped in raw()), then call
 // hydrate(root) once the markup is in the page: bars fill and numbers count up as they scroll into view.
 
@@ -61,17 +61,18 @@ export function ago(d) {
 
 // ---- widgets --------------------------------------------------------------------------------------------------------
 
-/** An animated bar; frac 0..1 (null = empty). tone: "" (crimson to ember), "gold", "stone", "dim". */
+/** An animated bar; frac 0..1 (null = empty). tone: "" (ember), "gold" (bone), "stone" (verdigris), "dim". */
 export function bar(frac, tone = "", extra = "") {
 	const f = frac === null || frac === undefined || !isFinite(frac) ? 0 : clamp01(frac);
 	return h`<div class="bar ${tone} ${extra}" data-fill="${f.toFixed(4)}" aria-hidden="true"><i></i></div>`;
 }
 
-/** A labelled stat bar. */
-export function stat(name, value, frac, { tone = "", unit = "", note = "" } = {}) {
-	return h`<div class="stat" role="group" aria-label="${name}: ${value}${unit ? " " + unit : ""}">
-		<div class="stat-head"><span class="stat-name">${name}</span><span class="stat-val">${value}${unit ? h`<small>${unit}</small>` : ""}</span></div>
-		${bar(frac, tone)}
+/** A vital sign: a small label, a big number (unit set smaller, e.g. "%"), a thin bar and a note. */
+export function stat(name, value, frac, { tone = "", unit = "", note = "", accent = false } = {}) {
+	return h`<div class="stat ${accent ? "accent" : ""} ${tone}" role="group" aria-label="${name}: ${value}${unit}">
+		<div class="k">${name}</div>
+		<div class="v">${value}${unit ? h`<small>${unit}</small>` : ""}</div>
+		${bar(frac, tone, "thin")}
 		${note ? h`<div class="stat-note">${note}</div>` : ""}
 	</div>`;
 }
@@ -234,9 +235,73 @@ export const EMBLEMS = {
 /** The rank badge: a carved hexagonal seal with the tier's numeral. */
 export function rankBadge(rank, size = "") {
 	return h`<span class="rank rank-${rank.tier} ${size}" title="Rank ${rank.numeral}: ${rank.name}">${raw(`<svg viewBox="0 0 100 110" aria-hidden="true">
-		<polygon points="50,4 94,28 94,82 50,106 6,82 6,28" fill="#120e0c" stroke="currentColor" stroke-width="3"/>
+		<polygon points="50,4 94,28 94,82 50,106 6,82 6,28" fill="#0e0f13" stroke="currentColor" stroke-width="3"/>
 		<polygon points="50,14 85,33 85,77 50,96 15,77 15,33" fill="none" stroke="currentColor" stroke-width="1.2" opacity=".55"/>
 		${rank.tier >= 4 ? '<path d="M50 14 L56 24 L50 21 L44 24 Z M50 96 L56 86 L50 89 L44 86 Z" fill="currentColor"/>' : ""}
 		${rank.tier >= 6 ? '<circle cx="50" cy="55" r="34" fill="none" stroke="currentColor" stroke-width=".8" stroke-dasharray="2 3"/>' : ""}
-		<text x="50" y="${rank.numeral.length > 2 ? 64 : 66}" text-anchor="middle" font-family="Cinzel, serif" font-weight="900" font-size="${rank.numeral.length > 2 ? 28 : 34}" fill="currentColor">${rank.numeral}</text></svg>`)}${size === "sm" ? "" : h`<span class="rank-name">${rank.name}</span>`}</span>`;
+		<text x="50" y="${rank.numeral.length > 2 ? 64 : 67}" text-anchor="middle" font-family="Fraunces, Georgia, serif" font-style="italic" font-weight="600" font-size="${rank.numeral.length > 2 ? 30 : 38}" fill="currentColor">${rank.numeral}</text></svg>`)}${size === "sm" ? "" : h`<span class="rank-name">${rank.name}</span>`}</span>`;
+}
+
+// ---- the line chart (inline SVG, drawn at the container's pixel width so text and dots stay crisp) ----------------------
+
+const SVG_NS = "http://www.w3.org/2000/svg";
+function svgEl(tag, attrs, parent) {
+	const e = document.createElementNS(SVG_NS, tag);
+	for (const k of Object.keys(attrs)) e.setAttribute(k, attrs[k]);
+	if (parent) parent.appendChild(e);
+	return e;
+}
+
+/** Draw a 0..1 line chart into el (replacing its content); call again on resize.
+ *  n points in order; series = [{cls, values: [y|null] (length n), dots, area, label}];
+ *  breaks = indices that start a new group (a dashed rule before them; lines do not cross them);
+ *  titles[i] = the tooltip of point i; xLabels = [{i, text}]. Colours come from the stylesheet (.chart .s-<cls>). */
+export function lineChart(el, { n, series, breaks = [], titles = [], xLabels = [], height = 210 }) {
+	const W = Math.max(260, Math.round(el.clientWidth || 600)), H = height;
+	const L = 44, R = 14, T = 14, B = 28;
+	const x = (i) => L + (n <= 1 ? (W - L - R) / 2 : (i * (W - L - R)) / (n - 1));
+	const y = (v) => T + (1 - v) * (H - T - B);
+	const svg = svgEl("svg", { class: "chart-svg", width: W, height: H, viewBox: `0 0 ${W} ${H}`, "aria-hidden": "true", focusable: "false" });
+	for (const v of [0, 0.25, 0.5, 0.75, 1]) {
+		svgEl("line", { class: v === 0 ? "axis" : "gridline", x1: L, x2: W - R, y1: y(v), y2: y(v) }, svg);
+		if (v === 0 || v === 0.5 || v === 1) {
+			const t = svgEl("text", { class: "tick", x: L - 8, y: y(v) + 3.5, "text-anchor": "end" }, svg);
+			t.textContent = Math.round(v * 100) + "%";
+		}
+	}
+	const brk = new Set(breaks);
+	for (const i of breaks) if (i > 0 && i < n) svgEl("line", { class: "brk", x1: (x(i - 1) + x(i)) / 2, x2: (x(i - 1) + x(i)) / 2, y1: T - 4, y2: H - B }, svg);
+	let lastX = -1e9;
+	for (const { i, text } of xLabels) {
+		const px = x(i);
+		if (px - lastX < 64) continue;
+		const t = svgEl("text", { class: "tick", x: Math.min(px, W - R - 24), y: H - 8, "text-anchor": i === 0 ? "start" : "middle" }, svg);
+		t.textContent = text;
+		lastX = px;
+	}
+	for (const s of series) {
+		const g = svgEl("g", { class: "s-" + s.cls }, svg);
+		// runs of consecutive values, cut at nulls and at group breaks
+		const runs = [];
+		let run = [];
+		for (let i = 0; i < n; i++) {
+			const v = s.values[i];
+			if (brk.has(i) && run.length) { runs.push(run); run = []; }
+			if (v === null || v === undefined || !isFinite(v)) { if (run.length) runs.push(run); run = []; continue; }
+			run.push([x(i), y(Math.max(0, Math.min(1, v))), i]);
+		}
+		if (run.length) runs.push(run);
+		for (const r of runs) {
+			const d = r.map(([px, py], k) => (k ? "L" : "M") + px.toFixed(1) + " " + py.toFixed(1)).join(" ");
+			if (s.area && r.length > 1) svgEl("path", { class: "area", d: `${d} L${r[r.length - 1][0].toFixed(1)} ${y(0)} L${r[0][0].toFixed(1)} ${y(0)} Z` }, g);
+			if (r.length > 1) svgEl("path", { class: "line", d }, g);
+			if (s.dots || r.length === 1) {
+				for (const [px, py, i] of r) {
+					const c = svgEl("circle", { class: "dot", cx: px.toFixed(1), cy: py.toFixed(1), r: s.dots ? 3.6 : 2.4 }, g);
+					if (titles[i]) svgEl("title", {}, c).textContent = `${titles[i]} · ${s.label}: ${Math.round(s.values[i] * 100)}%`;
+				}
+			}
+		}
+	}
+	el.replaceChildren(svg);
 }

@@ -203,6 +203,8 @@ namespace HW
 		float       StartDistance = 650.f;
 		/** The keeper's health relative to the tuning (RL::KeeperHealthScale for the RL keepers); mortal runs only. */
 		float       BossHealthScale = 1.f;
+		/** FDuel::KeeperDamageScale for this encounter (the game's difficulty; 1 = the rules as trained and as B0 grades). */
+		float       KeeperDamageScale = 1.f;
 	};
 
 	/**

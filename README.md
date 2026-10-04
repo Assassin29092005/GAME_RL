@@ -13,9 +13,8 @@ duel, the moves and frame data, the controls, the Fab-pack look — except **who
 
 | | |
 |---|---|
-| **Pathbreaker** (easy mode) | the scripted keeper: a fixed pattern you can learn (the control arm) |
-| **Hellwalker** | the **RL keeper**: a recurrent policy network (`Content/HellwalkerRL/RL/hellwalker_rl.hwrl`), run by a small C++ forward pass inside the game. One network plays all **three keepers** — the Warden, the Sage, the Returned — each with its own style, at every **difficulty** (Easy · Normal · Hard · Hellwalker · Adaptive). Its memory of you is carried from shrine to shrine and dropped when you quit |
-| **66 Days** | Hellwalker with 66 lives |
+| **Normal** (mode 1) | the scripted keepers: fixed patterns you can learn (the control arm; internally *Pathbreaker*) |
+| **Adaptive AI** (mode 2) | the **RL keepers**: a recurrent policy network (`Content/HellwalkerRL/RL/hellwalker_rl.hwrl`), run by a small C++ forward pass inside the game. One network plays all **three keepers** — the Warden, the Sage, the Returned — each with its own style, at every **difficulty** (Easy · Normal · Hard · Hellwalker). Its memory of you is carried from shrine to shrine and dropped when you quit, and **how hard it plays grows with how well it actually predicts you** (its *insight*): a trick wins the first fights, and by the fourth or fifth it has read it (internally *Hellwalker*) |
 
 The old tally brain is not in the game; it lives only in the evaluation tools (`Sim/Classic`) as the benchmark
 the RL keeper is measured against. Design: [RL.md](RL.md) (the plan), [RL/DESIGN.md](RL/DESIGN.md) (the
@@ -27,12 +26,12 @@ engineering contract), [PLAN.md](PLAN.md) (the combat spec). Theme research: [Ph
 |---|---|
 | **The game (.exe)** | `Tools\Package.bat` builds `Build\Packaged\Windows\HellwalkerRL.exe` (Shipping; `Package.bat Development` keeps logs and the console). Copy the whole `Build\Packaged\Windows` folder anywhere and run the exe |
 | **Editor** | open `HellwalkerRL.uproject` (starts on `/Game/HellwalkerRL/Maps/L_Hellwalker`) and press **Play** — the valley is built in C++ when play starts |
-| `Tools\Play.bat` | the open world in a window (title: new game / continue). `-HWWorldMode=hellwalker` skips the title; `-HWPolicy=<file.hwrl>` plays another trained keeper |
+| `Tools\Play.bat` | the open world in a window (title: new game / continue). `-HWWorldMode=normal\|adaptive` skips the title; `-HWDifficulty=`, `-HWParryAssist=RingSlow\|Ring\|Off`; `-HWPolicy=<file.hwrl>` plays another trained keeper |
 | `Tools\Arena.bat` | the duel on its own (`-HWTier=`, `-HWBlind`, `-HWBoss=Sevarog\|Wukong\|Golem`, `-HWKeeper=0\|1\|2`) |
 | `Tools\Demo.bat habitual 0.8 hellwalker` | watch a simulated player fight the RL keeper (F3 shows its reasoning) |
 | `Tools\Build.bat` · `Tools\Test.bat` · `Tools\MakeMaps.bat` | build the editor target · every automation test, headless · regenerate the maps and the generated materials |
 | `Tools\RLBuild.bat` · `Tools\RLTrain.bat` · `Tools\RLEval.bat` · `Tools\RLShip.bat` | the RL tools: build the training DLL and the simulator · train · evaluate (RL.md §7) · put a trained keeper into the game |
-| `Tools\Thesis.bat` | B0 — the headless check the reference project had to pass, now run on the RL keeper (`--identity 0\|1\|2`, `--skill`) |
+| `Tools\Thesis.bat` | B0 — the headless check the reference project had to pass, now run on the RL keeper (`--identity 0\|1\|2`, `--skill`, `--keeper-damage`). `Thesis.bat --arc [--arc-lo --arc-hi --keeper-damage]`: the Adaptive AI learning arc (insight) against one-trick, switching and near-random players |
 | `Tools\Parity.bat` | the Unreal-vs-simulator gap: the same autoplay players and keeper in the real game and in the training simulator |
 | `Tools\CI.bat` | what GitHub Actions runs (`.github/workflows/ci.yml`): core tests, env benchmark, torch/C++/ONNX parity, trainer self-tests |
 | **The website** | `web/` — download page + every player's stats and what the keeper learned about them ([web/README.md](web/README.md): Firebase, Render, itch.io). Local preview: `RL\.venv\Scripts\python.exe web\dev\serve.py` |
@@ -76,26 +75,34 @@ the objective ("Tracking: … m"). Fallen keepers drop off.
 | Space + direction | A + stick | ghoststep (dodge) |
 | F | B | switch weapon: twin blades / greatblade |
 | Tab / middle mouse | right stick press | lock-on |
-| R · 1 / 2 | — | arena: fight again (it remembers) · choose tier |
+| R · 1 / 2 | — | arena: fight again (it remembers) · choose mode (Normal / Adaptive AI) |
 
 **Menus** — Esc or P / Start: **pause** (resume · settings · "How the keeper learns you" · the keeper's notebook ·
 restart / quit to title · quit). N / D-pad down: **the keeper's notebook**. Menus work with mouse, keyboard
-(arrows, Enter, Esc) and gamepad (D-pad / stick, A, B). Title: 1 / 2 / 3 new walk (Pathbreaker / Hellwalker /
-66 Days), Enter continue. F1 controls panel · F3 debug overlay (the keeper's choice, its read of you, its memory, hit
+(arrows, Enter, Esc) and gamepad (D-pad / stick, A, B). Title: 1 / 2 new walk (Normal / Adaptive AI), Enter
+continue. F1 controls panel · F3 debug overlay (the keeper's choice, its read of you, its memory, hit
 volumes).
 
-**Settings** (saved per user): *Gameplay* — difficulty, mouse sensitivity, invert Y · *Controls* — rebinding (keyboard
+**Settings** (saved per user): *Gameplay* — difficulty, parry assist, mouse sensitivity, invert Y · *Controls* — rebinding (keyboard
 and gamepad), reset to defaults · *Graphics* — overall quality, resolution, window mode, v-sync, frame-rate limit
 (applied on Apply) · *Audio* — master / music / effects · *Accessibility* — HUD scale, how long the READ banner holds,
 camera shake (also turns off the hit kick), show the tutorial again.
 
-**Tiers**:
-* **Pathbreaker** — the scripted control arm: a fixed pattern you can learn.
-* **Hellwalker** — the RL keeper: a neural network with a memory of you, deciding every move at the moments the
+**Modes**:
+* **Normal** — the scripted control arm: fixed patterns you can learn, at every shrine.
+* **Adaptive AI** — the RL keeper: a neural network with a memory of you, deciding every move at the moments the
   script could (see "The RL keeper" below). After one of its swings lands on the answer its read head predicted, the
   **READ** banner shows what it expected you to do — testimony, not telegraph.
 
-**Console** (`~`): `hw.Reset [seed]` · `hw.Tier pathbreaker|hellwalker` · `hw.InjectParry <frames>` (A3) ·
+**The parry assist** (both modes, Settings → *Parry assist*: ring + slow motion · ring only · off): a **red ring** round
+the keeper's weapon hand is lit exactly while a parry pressed now would land (grey when you could not get one out in
+time), and the duel slows while it is lit — 0.4x on Easy (the 0.2 s window lasts 0.5 s), 0.6x Normal, 0.75x Hard,
+0.85x Hellwalker. Only the duel slows (its frame clock and the two fighters), never the rules: the simulator, the
+training and the keeper's view of time are untouched. The ring times the impact the wind-up *shows*, so feints and the
+delayed heavy still bait — a player who parries every ring is a habit the keeper learns and fakes. Unparryable attacks
+(the killer thrust, the grab) get no ring; their telegraph is **violet**, so red only ever means "parry now".
+
+**Console** (`~`): `hw.Reset [seed]` · `hw.Tier normal|adaptive` · `hw.InjectParry <frames>` (A3) ·
 `hw.Autoplay <kind> [skill]` · `hw.Debug` · `hw.Blind` · `hw.ResetModel` (the keepers forget you) · `hw.Menu <page>` ·
 `hw.Map [open|close|track <0|1|2|auto>|zoom <1-4>]` (open world) · `hw.Shot` · `hw.Photo player|boss|off [yaw dist height]` ·
 `hw.Blade <0|1|2> <pitch yaw roll> [x y z]`.
@@ -107,15 +114,15 @@ camera shake (also turns off the hit kick), show the tutorial again.
 | **Valley** | `HWWorldGen`: a 2.4 km heightfield (hills, ridges, a mountain wall) with flattened plazas and carved paths — a pure function of the seed. `AHWOpenWorld` meshes it (10x10 procedural chunks, 460k triangles, collision), lights it (sun, atmosphere, volumetric clouds, fog) and dresses it (`HWDressing`: firs, broken firs, cliff outcrops, boulders, stones, grass and fern clumps from the environment packs; each instance fitted from the mesh's own bounds; ~55k instances). Builds in ~1.5 s. |
 | **Ground** | a code-built four-layer material (`HWTerrainMaterial`): the Lighthouse pack's rock, scrub, path-dirt and ash textures, world-projected and blended by weights the generator writes into the vertex colour (rock on the steeps, dirt on paths and plazas, ash on the heights). Without the pack, the vertex colour is the albedo. |
 | **Sites** | 4 bells (checkpoints), 3 shrines, 6 ruins with the Game Animation Sample's traversable blocks (vault / mantle). With Paragon Monolith: the shrines are dark "Evil" fortresses (gate arch, wall slabs, barbican spires, spiked sconces, broken statues at the approach; the final one with two tall keeps); the ruins are jungle stone (decorated floor, mossy columns, a ring arch, rubble, stone over the traversal blocks); the Western Watch keeps the Lighthouse pack's lighthouse. The greybox stays underneath as the hidden colliders, so the duel floor and walls behave the same with or without the packs. |
-| **Keepers** | the Ninefold Warden (Sevarog, the Warden script) · the Monkey Sage (Wukong, the Sage script) · the Warden, Returned — reborn in stone (the Stone Golem; the final shrine — sealed until the other two fall; always reads you). |
+| **Keepers** | the Ninefold Warden (Sevarog, the Warden script) · the Monkey Sage (Wukong, the Sage script) · the Warden, Returned — reborn in stone (the Stone Golem; the final shrine — sealed until the other two fall; reads you in Adaptive AI). |
 | **The Crossroads** | a hamlet around the central bell (`HWSettlement.cpp`, the Desert City kit): mud-brick houses facing the bell with the roads left open, a market of fabric stalls, fire pits, chimney smoke, great rocks around it (its plaza is flattened to 36 m). |
 | **Fire and smoke** | Niagara Examples: fire on logs in the bells' braziers (lit when you ring them), the pits and the shrines' sconces (out when the seal breaks); smoke rising behind every shrine whose keeper lives; a teleport-in as Soul wakes and as both fighters enter a duel; the loser of a duel shatters into embers. |
 | **Map** | M: the valley from above — a 1024² picture rendered once per world from `FHWWorldGen` (ground colour, paths and plazas, hill shading, 20 m contours) on a pool thread (~1 s, never on the game thread), drawn with Canvas; the keepers, bells and you over it. The pure parts (projection, the zoomed view, edge-indicator placement, the tracking rule) are `HWMap` (tests `Project.HellwalkerRL.Map.*`). |
 | **Flow** | E at a shrine's gate: the explorer steps out, the duel runs on the plaza, and when it ends you step back into the world. Every keeper reads the same you: the RL keeper's memory is shared across the whole walk. Die: you wake again (at your bell, or — during the build phase — at the next keeper's gate). |
-| **Modes** | Pathbreaker (scripted keepers, the final one still reads you) · Hellwalker · **66 Days** (66 lives; when the last day passes, the save is erased). Progress is saved at bells and shrines (`UHWSaveGame`); the keepers' memory of you is not — they forget you when you quit. |
+| **Modes** | Normal (every keeper scripted) · Adaptive AI (every keeper the RL keeper). (66 Days was removed; an old 66-Days save continues as Adaptive AI.) Progress is saved at bells and shrines (`UHWSaveGame`); the keepers' memory of you is not — they forget you when you quit. |
 | **Build phase** | new games and deaths put you just outside the next keeper's gate. `-HWSpawnAtBell` restores the bells. |
 
-**The script.** Pathbreaker's two scripts (the Warden, the Sage) are the reference project's, played verbatim by `FScriptBrain`; the RL keeper has no script — the three Hellwalker keepers differ only in look, health and place.
+**The script.** Normal mode's two scripts (the Warden, the Sage) are the reference project's, played verbatim by `FScriptBrain`; the RL keeper has no script — the three Adaptive AI keepers differ only in look, health and place.
 
 Automation (`HWAutomation`, both modes): `-HWShotAt/-HWShotEvery/-HWShots`, `-HWQuitAt`,
 `-HWExec="9:hw.Kill boss|17:hw.Duel 1"` (timed console commands); open world only: `-HWDuel=<i>`,
@@ -231,23 +238,46 @@ now buys a breath — the keeper may guard, step or move as soon as its stagger 
 retrained under them (Results below).
 
 The same network at every difficulty: the skill input slows its eyes (perception 0.1 → 0.27 s), its decisions
-(every 0.1 → 0.2 s), shortens its strings (3 → 1) and doubles the grab / killer cooldowns; Easy and Normal also sample
-from the policy instead of always taking its best move; Easy adds a breather — an attack that opens a string must come at
-least 1.4 s after the keeper's previous attack began (`RL::EasySwingGap`, a mask; the weights are the same, and the ladder
-below measures what it does). **Adaptive** moves the skill between fights to keep them
-close (−0.10 after a crushing keeper win, −0.03 after a narrow one, +0.04 / +0.10 after yours; sampling below 0.3,
-the breather below 0.15), so a losing streak walks it down to Easy and wins bring it back.
+(every 0.1 → 0.2 s), shortens its strings (3 → 1) and doubles the grab / killer cooldowns.
 
-| difficulty | skill · sampling | keeper dmg/min | taken/min | swings/min | fight (s) |
-|---|---|---|---|---|---|
-| Easy | 0 · T 1.0 · breather | **524** | 175 | 38 | 43 |
-| *Pathbreaker (the script)* | — | *701* | *441* | *62* | *32* |
-| Normal | 0.4 · T 0.6 | 1121 | 198 | 66 | 20 |
-| Hard | 0.75 · greedy | 1257 | 201 | 72 | 18 |
-| Hellwalker | 1 · greedy | 1322 | 177 | 75 | 17 |
+**After play (2026-10-04): softer, and a learning arc.** "I lose every fight, so the boss learning my trick never shows."
+Three changes, none of which touches the rules the keeper was trained on:
 
-(Mortal fights against held-out habit players and the reference bots, `RL/eval.py` ladder; simulated players almost
-never win, so damage is the measure. The human playtest will tell where the steps really sit.)
+* **Every difficulty hits softer** (`UHWSettingsSubsystem::PresetFor`, both modes): the keeper's attacks deal 60 % of their
+  damage on Easy, 75 % Normal, 85 % Hard, 90 % Hellwalker (`FDuel::KeeperDamageScale`, health only — never the guard
+  drain; 1 in training, the simulator and the parity runs). Normal is now the default difficulty.
+* **The parry assist** (above), on at every difficulty, Hellwalker included.
+* **Insight — the Adaptive AI arc** (`HW::FRLInsight`, replacing the old Adaptive difficulty): the keeper's strength now
+  follows how well it actually predicts *you*. After each fight, insight moves (an exponential moving average) toward that
+  fight's read-head accuracy on its attack calls, normalised between a near-random player (40 %) and a solved one (70 %);
+  the next fight's skill walks the difficulty's range with it (Easy 0 → 0.4, Normal 0 → 0.7, Hard 0.15 → 0.85, Hellwalker
+  0.3 → 1), it samples loosely while it does not know you (temperature 2.5, gone at insight 0.7) and waits 3.5 s between
+  attack strings at first (gone at 0.6) — it watches before it presses. Repeat one trick and its calls come true, so
+  insight climbs over four or five fights; change tricks and its calls go wrong, so insight decays (explicit, gradual
+  forgetting on top of the memory's own). Insight is session state like the memory: kept keeper to keeper, dropped on
+  quit or reset.
+
+The arc, measured (`Thesis.bat --arc`: 64 sessions of 6 lethal fights per player against the shipped keeper, the Normal
+preset, the simulator's habit players executing one answer to every swing; win % per fight):
+
+| player (simulated) | fights 1 → 6, player win % | insight before each fight |
+|---|---|---|
+| always blocks, skill 0.85 | 98 · 92 · 70 · **28** · **3** · 0 | 0 · .14 · .27 · .43 · .59 · .71 |
+| always steps left, skill 0.85 | 97 · 94 · 80 · **48** · **19** · 3 | 0 · .08 · .19 · .34 · .50 · .64 |
+| always parries, skill 0.60 | 92 · 69 · 45 · **27** · **17** · 22 | 0 · .19 · .36 · .51 · .63 · .72 |
+| always parries, skill 0.85 | 100 · 100 · 98 · 100 · 98 · 100 | 0 · .24 · .46 · .64 · .74 · .80 |
+| always attacks, skill 0.85 | 6 · 0 · 0 · 0 · 0 · 0 | 0 · .31 · .51 · .63 · .71 · .78 |
+| near-random, skill 0.85 | 95 · 98 · 98 · 100 · 100 · 97 | 0 · .03 · .05 · .05 · .06 · .08 |
+
+A clean trick wins the first two or three fights and is countered by the fourth or fifth; a player who stays
+unpredictable keeps its insight low. Two honest limits: a near-perfect parry bot (skill 0.85 reads half the feints) is
+never countered — the parry-and-punish weakness the league found, made larger by the easier parry rules (a human who
+parries on the ring is baited by its feints and delayed heavy, which the bot is not); and switching to another *predictable*
+trick does not reset the arc — it reads the new one within a fight. Hard and Hellwalker counter faster (Hellwalker: a
+blocking player wins fight 1 about half the time).
+
+(The old ladder, measured before this change at full damage and fixed skill: Easy 524 keeper damage/min, the script
+701, Normal 1121, Hard 1257, Hellwalker 1322 — `RL/eval.py` ladder.)
 
 ### Sound and feel
 
@@ -278,7 +308,10 @@ saying anonymous stats are sent for research. Nothing is sent until `Config/Defa
 Firebase project — setup, step by step, in [web/README.md](web/README.md); the data contract is
 [web/CONTRACT.md](web/CONTRACT.md); the security rules are `web/firebase/firestore.rules`.
 
-Verified end to end against a local mock of the Firebase REST API (`web/dev/mock_firebase.py`): 82 contract checks
+Each fight record (contract v2) also carries the parry assist the player had, the keeper's damage scale, the parry window
+and the keeper's insight when the fight began, so assisted and unassisted parries can be told apart.
+
+Verified end to end against a local mock of the Firebase REST API (`web/dev/mock_firebase.py`): 109 contract checks
 (`web/dev/e2e_test.py`, incl. the attacks the rules must refuse), and the real game uploading to it — two scripted
 fights arrived with the player's totals exactly their sum, a bot fight was refused, a fight played while the server
 was down waited and arrived at the next launch, and the site showed the player linked by the game's token.
@@ -388,14 +421,14 @@ human playtest (RL-6) is the real judge of difficulty and fairness.
 Source/HellwalkerRL/Public/HWCore, Private/HWCore   engine-free C++ core, compiled into the game AND the tools
     HWTypes / HWMoves / HWFighter / HWDuel     the rules: frame data, moves, frame-stepped combat (PLAN §5, §6)
     HWBrain                                     IBossBrain, decision records, the Read Meter, the boss scripts
-    HWScriptBrain                               Pathbreaker: the script verbatim
+    HWScriptBrain                               Pathbreaker (the Normal mode): the script verbatim
     HWRLTypes / HWRLObserver / HWRLPolicy / HWRLBrain   the RL keeper: layouts, senses + masks, the network, the brain, the notebook
     HWEncounter / HWSim                         duel + brain + stats; 2-D arena and simulated players (habit, learning players)
     HWCoreTests / HWRLTests                     the done-tests, also run by ThesisSim
-Source/HellwalkerRL/...        the Unreal layer: duel subsystem, session memory, characters, HUD + menus (HWMenu,
-                               HWSettings), audio (HWAudio), the valley map (HWMap), research telemetry (HWTelemetry),
-                               open world, tests
-Sim/ThesisSim.cpp, SimArms.*   B0: Pathbreaker vs an adaptive arm (the RL keeper, or the classic brain)
+Source/HellwalkerRL/...        the Unreal layer: duel subsystem, session memory + insight, characters, HUD + menus (HWMenu,
+                               HWSettings), the parry assist (HWParryAssist), audio (HWAudio), the valley map (HWMap),
+                               research telemetry (HWTelemetry), open world, tests
+Sim/ThesisSim.cpp, SimArms.*   B0: Pathbreaker vs an adaptive arm (the RL keeper, or the classic brain); --arc: the insight arc
 Sim/Classic/                   the reference project's tally brain (playstyle model, payoff table) — tools only
 RL/native/                     the training environment (FRLEnvBatch, the exploiter env FRLPlayerEnv) + the hwrl.dll C ABI
 RL/*.py                        the trainer: hwcore (ctypes), env, players, model, ppo_rnn, train, export, eval, habits,
@@ -449,6 +482,16 @@ Content/HellwalkerRL/          the maps and generated materials (written by Tool
    editor-only code is guarded for the Shipping build; cooking bypasses the Zen store (its data lives on the full C:
    drive of the build machine). The keepers' voice lines are cooked one by one (an asset-manager rule), not the
    350 MB voice packs.
+12. **The keeper's strength follows its insight into you; the game is softer; a parry assist.** From play: the owner lost
+   every fight, so the arc the project exists to show — a trick works, then the keeper reads it — never appeared. Rather
+   than retrain, three game-side changes leave the trained environment untouched: the difficulty scales the keeper's
+   health damage (`FDuel::KeeperDamageScale`, 1 in training); a presentation-only parry assist (a red ring and duel-only slow
+   motion, keyed to the wind-up so baits still bait); and `FRLInsight`, which sets each fight's skill, sampling temperature
+   and breather from how well the read head called the player's answers to its attacks in the fights so far (calibrated
+   with `Thesis.bat --arc`; replaces the outcome-driven Adaptive difficulty). The skill input stays within its trained
+   range, but varies between fights of one session (training fixed it per session), and the 3.5 s breather at insight 0
+   is an unobserved mask like Easy's — measured by the arc, not assumed. Fight records carry the assist, the damage scale
+   and the insight (web/CONTRACT.md v2), so the paper can split parry and win rates by them.
 
 ## Status against RL.md
 
@@ -459,13 +502,14 @@ Content/HellwalkerRL/          the maps and generated materials (written by Tool
 | RL-2 | recurrent PPO vs the procedural population | **done** — 10⁹ decisions with the reading test logged during training; play diverges toward each habit's counter; hit rate dips and recovers around a habit switch |
 | RL-3 | constraints and fairness | **done** — all four B0 checks pass for all three keepers (64 sessions); the aggression floor holds per matchup |
 | RL-4 | exploiter league | **done, not converged** — seven rounds, fourteen exploiters in the population, learning players too; each round closes the hole it is shown (the parry-and-punish exchange 12.5 → 3.5), but a fresh exploiter still finds a winning strategy (above) |
-| RL-5 | inference + the RL brain in Unreal | **done** — `FRLBrain` plays the Hellwalker tier (fallback: the script when the model file is missing); three keepers, five difficulties, the notebook, menus, sound, the valley map with keeper tracking; the Unreal-vs-simulator gap measured (above); anonymous research telemetry + the website; the Shipping .exe |
+| RL-5 | inference + the RL brain in Unreal | **done** — `FRLBrain` plays the Adaptive AI mode (fallback: the script when the model file is missing); three keepers, four difficulties, the insight arc, the parry assist, the notebook, menus, sound, the valley map with keeper tracking; the Unreal-vs-simulator gap measured (above); anonymous research telemetry + the website; the Shipping .exe |
 | RL-6 | human playtest (B4) | **yours** — the website collects it: every player's fights, what the keeper learned, and the survey; `Tools\Arena.bat -HWBlind` labels the tiers Variant A / B |
 
 Tests: `Tools\Thesis.bat` (36 core tests: combat incl. the parry window and the post-parry pause, the script, the RL
-keeper incl. skill, learning players, the notebook and the Easy breather, the classic benchmark), `Tools\Test.bat` (59
-Unreal automation tests: core and RL wrappers, the shipped model, menus and settings, keepers and difficulty, the
-music's tension, world generation, the valley map and keeper tracking, the research telemetry, animation casts),
-`web/dev/e2e_test.py` (82 checks of the website's data contract and security rules against the mock), `RL\.venv\Scripts\python.exe RL\tests\test_parity.py` (torch vs C++ vs ONNX),
+keeper incl. skill, learning players, the notebook and the Easy breather, the classic benchmark), `Tools\Test.bat` (68
+Unreal automation tests: core and RL wrappers, the shipped model, menus and settings, the two modes, keepers, difficulty and
+insight, the parry assist against a real duel, the music's tension, world generation, the valley map and keeper tracking,
+the research telemetry, animation casts), `Tools\Thesis.bat --arc` (the insight arc),
+`web/dev/e2e_test.py --spawn` (109 checks of the website's data contract and security rules against the mock), `RL\.venv\Scripts\python.exe RL\tests\test_parity.py` (torch vs C++ vs ONNX),
 `RL\native\out\envbench.exe` (throughput, determinism, masks, rollover, attack log), `Tools\CI.bat` (all of the
 engine-free ones, as GitHub Actions runs them).

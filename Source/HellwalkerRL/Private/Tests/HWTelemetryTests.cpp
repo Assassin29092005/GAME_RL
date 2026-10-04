@@ -1,7 +1,8 @@
 // HellwalkerRL — the research telemetry's pure parts (no network): web/CONTRACT.md is what they must produce.
 //
 //   Project.HellwalkerRL.Telemetry.Answers       player symbols -> the contract's answer columns
-//   Project.HellwalkerRL.Telemetry.FightCommit   one documents:commit: the new fight + the player's increments, exactly the contract's fields
+//   Project.HellwalkerRL.Telemetry.FightCommit   one documents:commit: the new fight (v 2) + the player's increments (v 1), exactly the contract's fields
+//   Project.HellwalkerRL.Telemetry.Sanitise      the v2 fields always land inside the rules' ranges (assist, slow motion, damage, window, insight)
 //   Project.HellwalkerRL.Telemetry.PlayerCreate  the one-time player document: nickname, zero totals, server-time createdAt
 //   Project.HellwalkerRL.Telemetry.Nickname      "<Adjective> <Noun> <4 digits>", at most 24 characters
 //   Project.HellwalkerRL.Telemetry.NotebookDelta per-fight changes of the session's notebook; a reset notebook starts from zero
@@ -11,10 +12,12 @@
 #if WITH_DEV_AUTOMATION_TESTS
 
 #include "HWTelemetry.h"
+#include "HWCore/HWMoves.h"
 #include "Dom/JsonObject.h"
 #include "Internationalization/Regex.h"
 #include "Serialization/JsonReader.h"
 #include "Serialization/JsonSerializer.h"
+#include <limits>
 
 namespace
 {
@@ -34,14 +37,15 @@ namespace
 		R.ClientTime = FDateTime(2026, 10, 3, 12, 0, 0);
 		R.Session = TEXT("0123456789abcdef0123456789abcdef");
 		R.FightInSession = 2;
-		R.GameVersion = TEXT("1.3.0");
+		R.GameVersion = TEXT("1.4.0");
 		R.Mode = TEXT("openworld");
 		R.PlayMode = TEXT("hellwalker");
 		R.Brain = TEXT("rl");
 		R.Keeper = 1;
 		R.KeeperName = TEXT("The Monkey Sage");
 		R.Difficulty = TEXT("Normal");
-		R.Skill = 0.4f;
+		R.Skill = 0.28f;
+		R.bAdaptive = true;
 		R.Result = TEXT("win");
 		R.Seconds = 42.5f;
 		R.PlayerHealth = 0.3f;
@@ -55,7 +59,22 @@ namespace
 		R.Expected.Add({ TEXT("heavyCleave"), TEXT("stepL"), 0.48f });
 		R.Answers[0][0] = 5;   // fast: parry
 		R.Answers[1][2] = 3;   // heavy: stepL
+		R.Assist = TEXT("ring+slowmo");
+		R.SlowmoScale = 0.6f;
+		R.KeeperDamageScale = 0.75f;
+		R.ParryWindowFrames = 12;
+		R.Insight = 0.4f;
 		return R;
+	}
+
+	FString StrField(const TSharedPtr<FJsonObject>& F, const TCHAR* Key, const TCHAR* Kind = TEXT("stringValue"))
+	{
+		return F->GetObjectField(Key)->GetStringField(Kind);
+	}
+
+	double NumField(const TSharedPtr<FJsonObject>& F, const TCHAR* Key)
+	{
+		return F->GetObjectField(Key)->GetNumberField(TEXT("doubleValue"));
 	}
 
 	TArray<FString> TransformPaths(const TSharedPtr<FJsonObject>& Write)
@@ -118,12 +137,20 @@ bool FHWTelemetryFightCommitTest::RunTest(const FString& Parameters)
 		TEXT("result"), TEXT("seconds"), TEXT("playerHealth"), TEXT("keeperHealth"), TEXT("dmgDealt"), TEXT("dmgTaken"), TEXT("playerSwings"),
 		TEXT("playerHits"), TEXT("keeperSwings"), TEXT("keeperHits"), TEXT("keeperBlocked"), TEXT("keeperParried"), TEXT("keeperWhiffed"),
 		TEXT("parryAttempts"), TEXT("dodges"), TEXT("guardBreaks"), TEXT("keeperExposed"), TEXT("readsLanded"), TEXT("predictions"),
-		TEXT("predictionsCorrect"), TEXT("confident"), TEXT("confidentCorrect"), TEXT("expected"), TEXT("answers") };
-	TestEqual(TEXT("exactly the contract's fields (all but the server's `at`)"), F->Values.Num(), static_cast<int32>(UE_ARRAY_COUNT(Keys)));
+		TEXT("predictionsCorrect"), TEXT("confident"), TEXT("confidentCorrect"), TEXT("expected"), TEXT("answers"),
+		TEXT("assist"), TEXT("slowmoScale"), TEXT("keeperDamageScale"), TEXT("parryWindowFrames"), TEXT("insight") };
+	TestEqual(TEXT("exactly the contract's v2 fields (all but the server's `at`)"), F->Values.Num(), static_cast<int32>(UE_ARRAY_COUNT(Keys)));
 	for (const TCHAR* K : Keys) { TestTrue(FString::Printf(TEXT("field %s"), K), F->HasField(K)); }
+	TestEqual(TEXT("fight schema v 2"), StrField(F, TEXT("v"), TEXT("integerValue")), FString(TEXT("2")));
 	TestEqual(TEXT("ints are strings (integerValue)"), F->GetObjectField(TEXT("keeper"))->GetStringField(TEXT("integerValue")), FString(TEXT("1")));
 	TestEqual(TEXT("parries"), F->GetObjectField(TEXT("keeperParried"))->GetStringField(TEXT("integerValue")), FString(TEXT("7")));
-	TestTrue(TEXT("skill is a double"), FMath::IsNearlyEqual(F->GetObjectField(TEXT("skill"))->GetNumberField(TEXT("doubleValue")), 0.4, 1e-6));
+	TestTrue(TEXT("skill is a double"), FMath::IsNearlyEqual(F->GetObjectField(TEXT("skill"))->GetNumberField(TEXT("doubleValue")), 0.28, 1e-6));
+	TestTrue(TEXT("adaptive: the insight ramp set the skill"), F->GetObjectField(TEXT("adaptive"))->GetBoolField(TEXT("booleanValue")));
+	TestEqual(TEXT("assist"), StrField(F, TEXT("assist")), FString(TEXT("ring+slowmo")));
+	TestTrue(TEXT("slowmoScale is a double"), FMath::IsNearlyEqual(NumField(F, TEXT("slowmoScale")), 0.6, 1e-6));
+	TestTrue(TEXT("keeperDamageScale is a double"), FMath::IsNearlyEqual(NumField(F, TEXT("keeperDamageScale")), 0.75, 1e-6));
+	TestEqual(TEXT("parryWindowFrames is an int (integerValue)"), StrField(F, TEXT("parryWindowFrames"), TEXT("integerValue")), FString(TEXT("12")));
+	TestTrue(TEXT("insight is a double"), FMath::IsNearlyEqual(NumField(F, TEXT("insight")), 0.4, 1e-6));
 	TestTrue(TEXT("clientTime is a timestamp"), F->GetObjectField(TEXT("clientTime"))->GetStringField(TEXT("timestampValue")).StartsWith(TEXT("2026-10-03T12:00:00")));
 	const TSharedPtr<FJsonObject> Ans = F->GetObjectField(TEXT("answers"))->GetObjectField(TEXT("mapValue"))->GetObjectField(TEXT("fields"));
 	TestEqual(TEXT("answers: the four swing classes"), Ans->Values.Num(), 4);
@@ -139,6 +166,8 @@ bool FHWTelemetryFightCommitTest::RunTest(const FString& Parameters)
 	TArray<FString> Mask;
 	W2->GetObjectField(TEXT("updateMask"))->TryGetStringArrayField(TEXT("fieldPaths"), Mask);
 	TestEqual(TEXT("update mask"), Mask, TArray<FString>{ TEXT("v"), TEXT("gameVersion"), TEXT("difficulty"), TEXT("expected") });
+	TestEqual(TEXT("the players document stays at v 1"), StrField(W2->GetObjectField(TEXT("update"))->GetObjectField(TEXT("fields")), TEXT("v"),
+		TEXT("integerValue")), FString(TEXT("1")));
 	const TArray<FString> Paths = TransformPaths(W2);
 	for (const TCHAR* P : { TEXT("lastSeen"), TEXT("totals.fights"), TEXT("totals.wins"), TEXT("totals.seconds"), TEXT("totals.keeperParried"),
 			TEXT("totals.parryAttempts"), TEXT("keepers.sage.fights"), TEXT("keepers.sage.wins"), TEXT("answers.fast.parry"), TEXT("answers.heavy.stepL") })
@@ -147,6 +176,72 @@ bool FHWTelemetryFightCommitTest::RunTest(const FString& Parameters)
 	}
 	TestFalse(TEXT("no loss on a win"), Paths.Contains(TEXT("totals.losses")));
 	TestFalse(TEXT("guard breaks are not a total (fight only)"), Paths.Contains(TEXT("totals.guardBreaks")));
+	TestFalse(TEXT("the v2 fields are per fight (no totals)"), Paths.Contains(TEXT("totals.insight")) || Paths.Contains(TEXT("totals.slowmoScale")));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FHWTelemetrySanitiseTest, "Project.HellwalkerRL.Telemetry.Sanitise", HWTelemetryTestFlags)
+
+bool FHWTelemetrySanitiseTest::RunTest(const FString& Parameters)
+{
+	(void)Parameters;
+	// The assist names the duel may report -> the contract's three keys.
+	TestEqual(TEXT("ring+slowmo"), HWTelemetry::AssistKey(TEXT("ring+slowmo")), FString(TEXT("ring+slowmo")));
+	TestEqual(TEXT("RingSlow (the setting's enum name)"), HWTelemetry::AssistKey(TEXT("RingSlow")), FString(TEXT("ring+slowmo")));
+	TestEqual(TEXT("Ring + slow motion (a display name)"), HWTelemetry::AssistKey(TEXT("Ring + slow motion")), FString(TEXT("ring+slowmo")));
+	TestEqual(TEXT("Ring"), HWTelemetry::AssistKey(TEXT("Ring")), FString(TEXT("ring")));
+	TestEqual(TEXT("Off"), HWTelemetry::AssistKey(TEXT("Off")), FString(TEXT("off")));
+	TestEqual(TEXT("empty -> off"), HWTelemetry::AssistKey(FString()), FString(TEXT("off")));
+
+	auto Fields = [](const FHWFightRecord& R) { return Parse(HWTelemetry::FightFieldsJson(R)); };
+	FHWFightRecord R = SampleRecord();
+
+	// An unknown assist is "off", and slow motion without the ring reports 1.
+	R.Assist = TEXT("telekinesis");
+	TSharedPtr<FJsonObject> F = Fields(R);
+	if (!TestTrue(TEXT("valid JSON"), F.IsValid())) { return false; }
+	TestEqual(TEXT("unknown assist -> off"), StrField(F, TEXT("assist")), FString(TEXT("off")));
+	TestEqual(TEXT("... and its slowmoScale is 1"), NumField(F, TEXT("slowmoScale")), 1.0);
+	R.Assist = TEXT("RING+SLOWMO");
+	TestEqual(TEXT("the keys are case-sensitive (the rules are)"), StrField(Fields(R), TEXT("assist")), FString(TEXT("off")));
+	R.Assist = TEXT("ring");
+	TestEqual(TEXT("the ring alone: slowmoScale forced to 1"), NumField(Fields(R), TEXT("slowmoScale")), 1.0);
+
+	// Slow motion in (0, 1].
+	R.Assist = TEXT("ring+slowmo");
+	R.SlowmoScale = 0.f;
+	const double Zero = NumField(Fields(R), TEXT("slowmoScale"));
+	TestTrue(TEXT("slowmoScale 0 -> above 0"), Zero > 0.0 && Zero <= 1.0);
+	R.SlowmoScale = 1.5f;
+	TestEqual(TEXT("slowmoScale 1.5 -> 1"), NumField(Fields(R), TEXT("slowmoScale")), 1.0);
+	R.SlowmoScale = std::numeric_limits<float>::quiet_NaN();
+	TestEqual(TEXT("slowmoScale NaN -> 1"), NumField(Fields(R), TEXT("slowmoScale")), 1.0);
+
+	// The keeper's damage scale in 0.05..2, the window in 1..60 frames, insight in 0..1.
+	R.KeeperDamageScale = 0.f;
+	TestTrue(TEXT("keeperDamageScale 0 -> 0.05"), FMath::IsNearlyEqual(NumField(Fields(R), TEXT("keeperDamageScale")), 0.05, 1e-6));
+	R.KeeperDamageScale = 2.5f;
+	TestEqual(TEXT("keeperDamageScale 2.5 -> 2"), NumField(Fields(R), TEXT("keeperDamageScale")), 2.0);
+	R.ParryWindowFrames = 0;
+	TestEqual(TEXT("parryWindowFrames 0 -> 1"), StrField(Fields(R), TEXT("parryWindowFrames"), TEXT("integerValue")), FString(TEXT("1")));
+	R.ParryWindowFrames = 99;
+	TestEqual(TEXT("parryWindowFrames 99 -> 60"), StrField(Fields(R), TEXT("parryWindowFrames"), TEXT("integerValue")), FString(TEXT("60")));
+	R.Insight = -0.1f;
+	TestEqual(TEXT("insight -0.1 -> 0"), NumField(Fields(R), TEXT("insight")), 0.0);
+	R.Insight = 1.2f;
+	TestEqual(TEXT("insight 1.2 -> 1"), NumField(Fields(R), TEXT("insight")), 1.0);
+	R.Insight = std::numeric_limits<float>::quiet_NaN();
+	TestEqual(TEXT("insight NaN -> 0"), NumField(Fields(R), TEXT("insight")), 0.0);
+
+	// A default record (the script, no assist): the neutral v2 values.
+	const TSharedPtr<FJsonObject> Def = Fields(FHWFightRecord{});
+	TestEqual(TEXT("default assist off"), StrField(Def, TEXT("assist")), FString(TEXT("off")));
+	TestEqual(TEXT("default slowmoScale 1"), NumField(Def, TEXT("slowmoScale")), 1.0);
+	TestEqual(TEXT("default keeperDamageScale 1"), NumField(Def, TEXT("keeperDamageScale")), 1.0);
+	TestEqual(TEXT("default parryWindowFrames 12"), StrField(Def, TEXT("parryWindowFrames"), TEXT("integerValue")), FString(TEXT("12")));
+	TestEqual(TEXT("default insight 0"), NumField(Def, TEXT("insight")), 0.0);
+	const int32 Window = HW::Move(HW::EMoveId::PParry).Active;
+	TestTrue(TEXT("the game's parry window fits the rules' 1..60 frames (no clamping in practice)"), Window >= 1 && Window <= 60);
 	return true;
 }
 
@@ -155,13 +250,14 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FHWTelemetryPlayerCreateTest, "Project.Hellwalk
 bool FHWTelemetryPlayerCreateTest::RunTest(const FString& Parameters)
 {
 	(void)Parameters;
-	const TSharedPtr<FJsonObject> Body = Parse(HWTelemetry::PlayerCreateCommitJson(TEXT("proj"), TEXT("uid9"), TEXT("Ashen Moth 0176"), TEXT("1.3.0"), TEXT("Hard")));
+	const TSharedPtr<FJsonObject> Body = Parse(HWTelemetry::PlayerCreateCommitJson(TEXT("proj"), TEXT("uid9"), TEXT("Ashen Moth 0176"), TEXT("1.4.0"), TEXT("Hard")));
 	if (!TestTrue(TEXT("valid JSON"), Body.IsValid())) { return false; }
 	const TSharedPtr<FJsonObject> W = Body->GetArrayField(TEXT("writes"))[0]->AsObject();
 	TestFalse(TEXT("created once"), W->GetObjectField(TEXT("currentDocument"))->GetBoolField(TEXT("exists")));
 	TestEqual(TEXT("server-time createdAt"), TransformPaths(W), TArray<FString>{ TEXT("createdAt") });
 	const TSharedPtr<FJsonObject> F = W->GetObjectField(TEXT("update"))->GetObjectField(TEXT("fields"));
 	TestEqual(TEXT("nickname"), F->GetObjectField(TEXT("nickname"))->GetStringField(TEXT("stringValue")), FString(TEXT("Ashen Moth 0176")));
+	TestEqual(TEXT("the players document is v 1 (only fights moved to v 2)"), StrField(F, TEXT("v"), TEXT("integerValue")), FString(TEXT("1")));
 	const TSharedPtr<FJsonObject> Totals = F->GetObjectField(TEXT("totals"))->GetObjectField(TEXT("mapValue"))->GetObjectField(TEXT("fields"));
 	bool bZero = Totals->Values.Num() == 21;
 	for (const TPair<FString, TSharedPtr<FJsonValue>>& KV : Totals->Values)

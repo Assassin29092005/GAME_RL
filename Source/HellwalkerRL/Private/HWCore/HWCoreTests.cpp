@@ -201,6 +201,50 @@ namespace HW
 			return bOk;
 		}
 
+		// A3 — the difficulty's keeper damage scale (FDuel::KeeperDamageScale): a keeper hit and its block chip shrink by it;
+		// the guard drain and the player's own hits do not, and scale 1 is exactly the unscaled rules
+		bool TestA3KeeperDamageScale(std::string& Log)
+		{
+			FFixedOracle Oracle;
+			const float Scale = 0.6f;
+			auto Near = [](float A, float B) { return (A > B ? A - B : B - A) < 1.0e-3f; };
+			float HitLoss[2] = {}, ChipLoss[2] = {}, Drain[2] = {}, BossLoss[2] = {};
+			for (int32_t I = 0; I < 2; ++I)
+			{
+				FDuel Duel;
+				Duel.Reset();
+				Duel.KeeperDamageScale = I == 0 ? 1.f : Scale; // configuration: Reset keeps it
+				// a keeper hit
+				float H0 = Duel.Get(ESide::Player).Health;
+				Duel.Commit(ESide::Boss, EMoveId::BFastSlash);
+				StepUntilBossOutcome(Duel, Oracle, 60);
+				HitLoss[I] = H0 - Duel.Get(ESide::Player).Health;
+				// a keeper swing into a held guard: the chip scales, the drain does not
+				Duel.Reset();
+				Duel.SetGuardHeld(ESide::Player, true);
+				StepFrames(Duel, Oracle, 3);
+				H0 = Duel.Get(ESide::Player).Health;
+				const float C0 = Duel.Get(ESide::Player).ShaChi;
+				Duel.Commit(ESide::Boss, EMoveId::BFastSlash);
+				StepUntilBossOutcome(Duel, Oracle, 60);
+				ChipLoss[I] = H0 - Duel.Get(ESide::Player).Health;
+				Drain[I] = C0 - Duel.Get(ESide::Player).ShaChi;
+				// the player's hit on the keeper: never scaled
+				Duel.Reset();
+				const float B0 = Duel.Get(ESide::Boss).Health;
+				Duel.CommitPlayerAttack(false);
+				StepFrames(Duel, Oracle, 40);
+				BossLoss[I] = B0 - Duel.Get(ESide::Boss).Health;
+			}
+			const FMoveData& M = Move(EMoveId::BFastSlash);
+			const bool bUnscaledAtOne = Near(HitLoss[0], M.Damage) && Near(ChipLoss[0], M.Damage * Tuning().BlockChip);
+			const bool bScaled = Near(HitLoss[1], Scale * HitLoss[0]) && Near(ChipLoss[1], Scale * ChipLoss[0]);
+			const bool bUntouched = Drain[0] > 0.f && Near(Drain[1], Drain[0]) && BossLoss[0] > 0.f && Near(BossLoss[1], BossLoss[0]);
+			Logf(Log, "keeper FastSlash at x%.1f: hit %.2f -> %.2f, block chip %.2f -> %.2f; guard drain %.1f / %.1f and the player's hit %.1f / %.1f unchanged",
+				Scale, HitLoss[0], HitLoss[1], ChipLoss[0], ChipLoss[1], Drain[0], Drain[1], BossLoss[0], BossLoss[1]);
+			return bUnscaledAtOne && bScaled && bUntouched;
+		}
+
 		// A3 — guard breaks after 3 heavy blocks from full
 		bool TestA3GuardBreak(std::string& Log)
 		{
@@ -345,6 +389,7 @@ namespace HW
 			{ "A1.InterruptedSwingWhiffsOnce","A1", &TestA1InterruptedSwingWhiffsOnce },
 			{ "A3.ParryWindow",               "A3", &TestA3ParryWindow },
 			{ "A3.ParryLockout",              "A3", &TestA3ParryLockout },
+			{ "A3.KeeperDamageScale",         "A3", &TestA3KeeperDamageScale },
 			{ "A3.GuardBreak",                "A3", &TestA3GuardBreak },
 			{ "B1.Determinism",               "B1", &TestB1Determinism },
 			{ "B1.ControlIgnoresOutcome",     "B1", &TestB1ControlIgnoresOutcome },

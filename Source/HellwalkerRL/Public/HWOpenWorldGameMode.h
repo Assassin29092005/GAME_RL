@@ -3,16 +3,18 @@
 // Explore a generated valley as the Game Animation Sample's character (motion matching; vault, mantle).
 // Ring bells to rest. At a shrine's seal, challenge its boss: the explorer steps out, the arena duel —
 // unchanged, the one B0 validated — is played on the shrine plaza, and the explorer steps back in when it
-// ends. Every boss reads the same you: the session's playstyle model is shared across the whole world, so
-// the final shrine's Warden has watched you fight the whole way there.
+// ends. In Adaptive AI every boss reads the same you: the session's memory and insight are shared across the
+// whole world, so the final shrine's keeper has watched you fight the whole way there.
 //
-// Modes: Pathbreaker (scripted bosses; the final shrine still reads you), Hellwalker, 66 Days (Hellwalker
-// with 66 lives — the save is erased when the last day passes). Progress is saved at bells and shrines.
+// Modes (EHWPlayMode): Normal (= Pathbreaker: every keeper scripted, the final shrine too) and Adaptive AI
+// (= Hellwalker: the RL keepers that learn you). The retired 66 Days loads and plays as Adaptive AI. Progress is saved
+// at bells and shrines; dying wakes you at your bell.
 //
 // The valley map (M, AHWPlayerController) and keeper tracking read the keepers, bells and the tracked keeper from here
 // (GetKeepers / GetBells / GetTrackedKeeper); the rule itself is HWMap::ResolveTrackedKeeper.
 //
-// Command line (on top of FHWAutomation's): -HWWorldMode=pathbreaker|hellwalker|66 (skip the title),
+// Command line (on top of FHWAutomation's): -HWWorldMode=normal|pathbreaker|adaptive|hellwalker (skip the title; the
+//   retired 66 starts Adaptive AI with a warning),
 //   -HWContinue, -HWDuel=<shrine index> (challenge at once), -HWGoto=<site id>, -HWWorldSeed=<n>,
 //   -HWNoSave (never write the save slot), -HWAutoplay=<bot> [-HWAutoplaySkill=] (the bot fights the duels),
 //   -HWTour (the explorer walks the paths site to site, jumping at the ruins — demos and traversal checks).

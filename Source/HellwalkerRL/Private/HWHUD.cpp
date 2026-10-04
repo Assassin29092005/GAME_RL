@@ -56,11 +56,29 @@ namespace
 	const FLinearColor PanelBack(0.018f, 0.015f, 0.017f, 0.93f);
 	const FLinearColor Select(0.78f, 0.06f, 0.05f, 0.26f);
 	const FLinearColor Disabled(0.34f, 0.33f, 0.32f);
+	// The duel's tells: red means "parry now" (the parry assist) and nothing else; the unblockable telegraph is violet.
+	const FLinearColor ParryRed(1.f, 0.12f, 0.10f);
+	const FLinearColor ParryGrey(0.62f, 0.62f, 0.64f);
+	const FLinearColor Violet(0.62f, 0.30f, 1.f);
 
 	FLinearColor WithAlpha(FLinearColor C, float A)
 	{
 		C.A *= A;
 		return C;
+	}
+
+	/** The mode as players know it ("NORMAL" / "ADAPTIVE AI"); the tier names stay internal. */
+	FString ModeLabel(EHWTier Tier)
+	{
+		return Tier == EHWTier::Hellwalker ? FString(TEXT("ADAPTIVE AI")) : FString(TEXT("NORMAL"));
+	}
+
+	/** "up 12 after this fight" / "down 8 ..." / "unchanged ..." — an insight change in percentage points. */
+	FString InsightChangeText(float Change, const TCHAR* When)
+	{
+		const int32 Points = FMath::RoundToInt32(Change * 100.f);
+		if (Points == 0) { return FString::Printf(TEXT("unchanged %s"), When); }
+		return FString::Printf(TEXT("%s %d %s"), Points > 0 ? TEXT("up") : TEXT("down"), FMath::Abs(Points), When);
 	}
 
 	FLinearColor ToneColor(EHWMenuTone T)
@@ -312,18 +330,18 @@ void AHWHUD::DrawHelp()
 		{ K(EHWBind::Light), P(EHWBind::Light), TEXT("light attack (chain)") },
 		{ K(EHWBind::Heavy), P(EHWBind::Heavy), TEXT("heavy attack") },
 		{ K(EHWBind::Guard) + TEXT(" (hold)"), P(EHWBind::Guard), TEXT("block") },
-		{ K(EHWBind::Parry), P(EHWBind::Parry), TEXT("parry (just before the hit)") },
+		{ K(EHWBind::Parry), P(EHWBind::Parry), TEXT("parry (just before the hit: press while the red ring is lit)") },
 		{ K(EHWBind::Step) + TEXT(" + direction"), P(EHWBind::Step), TEXT("ghoststep (dodge)") },
 		{ K(EHWBind::Switch), P(EHWBind::Switch), TEXT("switch weapon: twin blades / greatblade") },
 		{ K(EHWBind::LockOn), P(EHWBind::LockOn), TEXT("lock-on") },
-		{ K(EHWBind::Restart) + TEXT("  /  1, 2"), TEXT("menu  /  D-pad L, R"), TEXT("arena: fight again (it remembers)  /  choose tier") },
+		{ K(EHWBind::Restart) + TEXT("  /  1, 2"), TEXT("menu  /  D-pad L, R"), TEXT("arena: fight again (it remembers)  /  pick the mode (its start screen names them)") },
 	};
 	const TArray<FRow> Menus = {
 		{ TEXT("Esc  /  ") + K(EHWBind::Pause), TEXT("Start"), TEXT("pause menu: settings, key bindings, the tutorial, restart, quit") },
 		{ K(EHWBind::Notebook), P(EHWBind::Notebook), TEXT("the keeper's notebook") },
 		{ K(EHWBind::Help), P(EHWBind::Help), TEXT("this panel") },
 		{ K(EHWBind::Debug), P(EHWBind::Debug), TEXT("debug overlay (the keeper's choice, its read of you, hit volumes)") },
-		{ TEXT("1 / 2 / 3"), TEXT("title menu"), TEXT("after an ending: a new walk as Pathbreaker / Hellwalker / 66 Days") },
+		{ TEXT("1 / 2"), TEXT("title menu"), TEXT("after an ending: a new walk - Normal / Adaptive AI") },
 	};
 	// Capped so that the panel always fits the screen, whatever the HUD scale.
 	const float S = FMath::Min(UI, FMath::Min(Canvas->ClipY / 1000.f, Canvas->ClipX / 1280.f));
@@ -368,6 +386,7 @@ void AHWHUD::DrawScreens()
 		return;
 	}
 	DrawWorldMarkers(Duel);
+	DrawParryCue(Duel);
 	DrawBars(Duel);
 	DrawReadMeter(Duel);
 	if (Duel->bDebugDraw) { DrawOverlay(Duel); }
@@ -409,12 +428,12 @@ void AHWHUD::DrawBars(UHWDuelSubsystem* Duel)
 		P.State == HW::EFighterState::GuardBroken ? Gold : Teal, BackBar);
 	Text(P.Weapon == 1 ? TEXT("Glaive") : TEXT("Twin Blades"), PX, PY + 34.f * S, Dim, Medium, 0.9f * S);
 
-	// Tier — top right (the medium font: right-aligned large text measured short and ran off the edge).
+	// The mode — top right (the medium font: right-aligned large text measured short and ran off the edge).
 	if (const UHWSessionSubsystem* Session = Duel->GetSession())
 	{
 		const bool bHell = Duel->GetTier() == EHWTier::Hellwalker;
 		const FLinearColor C = Session->bBlind ? Ink : (bHell ? Ember : Dim);
-		const FString Label = Session->TierLabel(Duel->GetTier()).ToUpper();
+		const FString Label = Session->bBlind ? Session->TierLabel(Duel->GetTier()).ToUpper() : ModeLabel(Duel->GetTier());
 		const FString Enc = FString::Printf(TEXT("encounter %d"), Session->EncountersStarted);
 		Text(Label, Canvas->ClipX - 40.f * S - TextWidth(Label, Medium, 1.2f * S), 30.f * S, C, Medium, 1.2f * S);
 		Text(Enc, Canvas->ClipX - 40.f * S - TextWidth(Enc, Medium, 0.8f * S), 62.f * S, Dim, Medium, 0.8f * S);
@@ -482,7 +501,8 @@ void AHWHUD::DrawWorldMarkers(UHWDuelSubsystem* Duel)
 		}
 	}
 
-	// Killer-move telegraph: a red mark over the Warden while an unblockable wind-up is running.
+	// Killer-move telegraph: a violet mark over the keeper while an unblockable wind-up is running (step it; red is the
+	// parry assist's alone).
 	const HW::FFighter& B = Duel->GetFighterState(HW::ESide::Boss);
 	if (const AHWCharacterBase* Boss = Duel->GetFighterActor(HW::ESide::Boss))
 	{
@@ -492,12 +512,11 @@ void AHWHUD::DrawWorldMarkers(UHWDuelSubsystem* Duel)
 			if (P.Z > 0.f)
 			{
 				const float R = (22.f + 6.f * FMath::Sin(Clock * 24.f)) * S;
-				const FLinearColor Red(1.f, 0.05f, 0.03f);
-				DrawLine(P.X, P.Y - R, P.X + R, P.Y, Red, 4.f * S);
-				DrawLine(P.X + R, P.Y, P.X, P.Y + R, Red, 4.f * S);
-				DrawLine(P.X, P.Y + R, P.X - R, P.Y, Red, 4.f * S);
-				DrawLine(P.X - R, P.Y, P.X, P.Y - R, Red, 4.f * S);
-				Text(TEXT("!"), P.X, P.Y - 16.f * S, Red, GEngine->GetLargeFont(), 1.1f * S, true);
+				DrawLine(P.X, P.Y - R, P.X + R, P.Y, Violet, 4.f * S);
+				DrawLine(P.X + R, P.Y, P.X, P.Y + R, Violet, 4.f * S);
+				DrawLine(P.X, P.Y + R, P.X - R, P.Y, Violet, 4.f * S);
+				DrawLine(P.X - R, P.Y, P.X, P.Y - R, Violet, 4.f * S);
+				Text(TEXT("!"), P.X, P.Y - 16.f * S, Violet, GEngine->GetLargeFont(), 1.1f * S, true);
 			}
 		}
 		// Lock-on reticle.
@@ -507,6 +526,66 @@ void AHWHUD::DrawWorldMarkers(UHWDuelSubsystem* Duel)
 			const float R = 7.f * S;
 			DrawLine(Chest.X - R, Chest.Y, Chest.X + R, Chest.Y, FLinearColor(1.f, 1.f, 1.f, 0.6f), 2.f * S);
 			DrawLine(Chest.X, Chest.Y - R, Chest.X, Chest.Y + R, FLinearColor(1.f, 1.f, 1.f, 0.6f), 2.f * S);
+		}
+	}
+}
+
+void AHWHUD::DrawParryCue(UHWDuelSubsystem* Duel)
+{
+	// The parry assist. Red = a parry pressed NOW lands (the duel's cue is exact to the frame, HWParryAssist.h); no
+	// countdown before the window opens. Nothing for unparryable moves, resolved swings or swings that cannot reach.
+	if (Duel->GetState() != EHWEncounterState::Running) { return; }
+	const FHWAssistParams& Assist = Duel->GetFightAssist();
+	const FHWParryCue& Cue = Duel->GetParryCue();
+	const bool bRing = Assist.bRing && Cue.bActive && Cue.bInWindow;
+	const bool bGlow = Assist.bIncomingGlow && Cue.bActive && Cue.bIncoming;
+	if (!bRing && !bGlow) { return; }
+	const AHWCharacterBase* Boss = Duel->GetFighterActor(HW::ESide::Boss);
+	APlayerController* PCtrl = GetOwningPlayerController();
+	if (Boss == nullptr || PCtrl == nullptr) { return; }
+	TArray<FVector> Points;
+	Boss->GetTelegraphPoints(Points);
+	FVector Eye;
+	FRotator View;
+	PCtrl->GetPlayerViewPoint(Eye, View);
+	const FVector CamRight = FRotationMatrix(View).GetScaledAxis(EAxis::Y);
+
+	const float S = UI;
+	const bool bLit = bRing && Cue.IsLit();
+	const bool bLast = bLit && Cue.FramesToImpact <= Cue.WindowFirst + 3; // the window's last 4 frames: brightest
+	const float Pulse = 0.5f + 0.5f * FMath::Sin(Clock * 28.f);
+	bool bKeyShown = false;
+	for (const FVector& W : Points)
+	{
+		const FVector At = Project(W);
+		if (At.Z <= 0.f) { continue; }
+		// The ring's size: 60 cm at the hand, as seen from here — never smaller than a thumbnail, so a newcomer catches it
+		// mid-swing at any distance.
+		const FVector Edge = Project(W + CamRight * 60.f);
+		const float Base = FMath::Clamp(static_cast<float>(FVector2D::Distance(FVector2D(At.X, At.Y), FVector2D(Edge.X, Edge.Y))), 34.f * S, 160.f * S);
+		const FVector2D C(At.X, At.Y);
+		if (!bRing)
+		{
+			// Easy: the swing is coming (no timing in it).
+			RingCircle(C, Base * 1.15f, FLinearColor(1.f, 0.86f, 0.72f, 0.3f), FMath::Max(1.f, 1.5f * S));
+			continue;
+		}
+		const float R = Base * FMath::Lerp(1.f, 0.45f, Cue.Progress); // closes as the window does
+		if (!bLit)
+		{
+			// The window is open, but you cannot get a parry out in time (mid-swing, stunned, a parry already spent).
+			RingCircle(C, R, WithAlpha(ParryGrey, 0.75f), 3.5f * S);
+			continue;
+		}
+		const float Strength = bLast ? 1.f : 0.8f;
+		FillCircle(C, R * (1.3f + 0.12f * Pulse), WithAlpha(ParryRed, (bLast ? 0.3f : 0.15f) * (0.65f + 0.35f * Pulse)));
+		RingCircle(C, R, WithAlpha(ParryRed, Strength), (bLast ? 8.f : 5.5f) * S);
+		RingCircle(C, R + 4.f * S, WithAlpha(FLinearColor(1.f, 0.6f, 0.55f), 0.4f * Strength), FMath::Max(1.f, 1.5f * S));
+		if (!bKeyShown)
+		{
+			ShadowText(KeyName(static_cast<uint8>(EHWBind::Parry), PadActive()), static_cast<float>(C.X), static_cast<float>(C.Y) + Base * 1.3f + 6.f * S, ParryRed,
+				GEngine->GetMediumFont(), 1.05f * S, true);
+			bKeyShown = true;
 		}
 	}
 }
@@ -531,6 +610,15 @@ void AHWHUD::DrawOverlay(UHWDuelSubsystem* Duel)
 		*ToFString(HW::Move(P.Move).Name), P.T, P.Health, P.ShaChi, E.Duel.FrameAdvantage(HW::ESide::Player)));
 	Lines.Add(FString::Printf(TEXT("boss    %-10s %-14s T%-3d HP %5.0f  SC %5.1f"), *ToFString(HW::FighterStateName(B.State)),
 		*ToFString(HW::Move(B.Move).Name), B.T, B.Health, B.ShaChi));
+	{
+		// The fight's assist and damage (start-of-fight values), the duel's speed now and the cue (D = frames to the real impact).
+		const FHWParryCue& Cue = Duel->GetParryCue();
+		const FString CueText = !Cue.bActive ? FString(TEXT("-"))
+			: FString::Printf(TEXT("D %d  window %d..%d  %s"), Cue.FramesToImpact, Cue.WindowFirst, Cue.WindowLast,
+				Cue.IsLit() ? TEXT("LIT") : (Cue.bInWindow ? TEXT("grey") : TEXT("incoming")));
+		Lines.Add(FString::Printf(TEXT("assist %s  slow x%.2f (now x%.2f)  keeper damage x%.2f  insight %.0f%%  cue %s"), *Duel->GetFightAssistName(),
+			Duel->GetFightSlowmoScale(), Duel->GetTimeScale(), Duel->GetFightKeeperDamageScale(), Duel->GetFightInsight() * 100.f, *CueText));
+	}
 	const int32 Decisions = Brain != nullptr ? Brain->Decisions() : 0;
 	if (RL != nullptr)
 	{
@@ -544,7 +632,7 @@ void AHWHUD::DrawOverlay(UHWDuelSubsystem* Duel)
 		Lines.Add(FString::Printf(TEXT("keeper: the %s  skill %.2f (sees you %d frames late, strings of %d)%s%s"), UTF8_TO_TCHAR(HW::RL::KeeperName(Duel->GetKeeperIdentity())),
 				Duel->GetKeeperSkill(), HW::RL::SkillParams(Duel->GetKeeperSkill()).Perception, HW::RL::SkillParams(Duel->GetKeeperSkill()).MaxString,
 				Duel->GetKeeperTemperature() > 0.f ? *FString::Printf(TEXT("  sampling T %.1f"), Duel->GetKeeperTemperature()) : TEXT(""),
-				Duel->IsKeeperAdaptive() ? TEXT("  adaptive") : TEXT("")));
+				Duel->GetKeeperSwingGap() > 0 ? *FString::Printf(TEXT("  breather %d f"), Duel->GetKeeperSwingGap()) : TEXT("")));
 		if (Mem != nullptr)
 		{
 			Lines.Add(FString::Printf(TEXT("memory: fight %d of this session, %d exchanges remembered, %d keeper swings seen"),
@@ -599,9 +687,9 @@ void AHWHUD::DrawStartScreen(UHWDuelSubsystem* Duel)
 	}
 	else
 	{
-		Text(FString::Printf(TEXT("[%s]  PATHBREAKER  -  a fixed pattern. Learn it."), bPad ? TEXT("D-pad left") : TEXT("1")), CX, Y, Dim,
+		Text(FString::Printf(TEXT("[%s]  NORMAL  -  a fixed pattern. Learn it."), bPad ? TEXT("D-pad left") : TEXT("1")), CX, Y, Dim,
 			GEngine->GetLargeFont(), 1.2f * S, true);
-		Text(FString::Printf(TEXT("[%s]  HELLWALKER  -  it learns you. Stay unpredictable."), bPad ? TEXT("D-pad right") : TEXT("2")), CX, Y + 60.f * S, Ember,
+		Text(FString::Printf(TEXT("[%s]  ADAPTIVE AI  -  it learns you. Stay unpredictable."), bPad ? TEXT("D-pad right") : TEXT("2")), CX, Y + 60.f * S, Ember,
 			GEngine->GetLargeFont(), 1.2f * S, true);
 	}
 	Text(TEXT("The keepers remember you for the whole session.  They forget when you quit."), CX, Y + 150.f * S, Dim, GEngine->GetMediumFont(), 1.f * S, true);
@@ -637,9 +725,11 @@ void AHWHUD::DrawEndScreen(UHWDuelSubsystem* Duel)
 		}
 		DrawNotebookLine(Duel, CX, Canvas->ClipY * 0.33f + 210.f * S);
 	}
+	const bool bBlind = Session != nullptr && Session->bBlind; // blind (B4): the keys name variants, never the modes
+	const FString Modes = bBlind ? FString(TEXT("Variant A / B")) : FString(TEXT("Normal / Adaptive AI"));
 	const FString Again = PadActive()
-		? FString(TEXT("[Start] menu: restart - it remembers        [D-pad left / right] switch tier"))
-		: FString::Printf(TEXT("[%s] fight again - it remembers        [1] / [2] switch tier        [Esc] menu"), *KeyName(static_cast<uint8>(EHWBind::Restart), false));
+		? FString::Printf(TEXT("[Start] menu: restart - it remembers        [D-pad left / right] %s"), *Modes)
+		: FString::Printf(TEXT("[%s] fight again - it remembers        [1] / [2] %s        [Esc] menu"), *KeyName(static_cast<uint8>(EHWBind::Restart), false), *Modes);
 	Text(Again, CX, Canvas->ClipY * 0.33f + 170.f * S, Ink, GEngine->GetMediumFont(), 1.f * S, true);
 }
 
@@ -695,6 +785,7 @@ void AHWHUD::DrawOpenWorld(AHWOpenWorldGameMode* GM, UHWDuelSubsystem* Duel)
 		if (Duel != nullptr && Duel->GetEncounter() != nullptr)
 		{
 			DrawWorldMarkers(Duel);
+			DrawParryCue(Duel);
 			DrawBars(Duel);
 			DrawReadMeter(Duel);
 			if (Duel->bDebugDraw) { DrawOverlay(Duel); }
@@ -721,7 +812,7 @@ void AHWHUD::DrawTitle(AHWOpenWorldGameMode* GM)
 	const float LogoY = FMath::Max(36.f, Canvas->ClipY / S * 0.12f) * S;
 	DrawRect(FLinearColor(0.f, 0.f, 0.f, 0.35f), 0.f, 0.f, Canvas->ClipX, Canvas->ClipY);
 	Text(TEXT("HELLWALKER"), CX, LogoY, Crimson, GEngine->GetLargeFont(), 3.4f * S, true);
-	Text(TEXT("An ash valley.  Three seals.  Every keeper reads you  -  and they all read the same you."), CX, LogoY + 112.f * S,
+	Text(TEXT("An ash valley.  Three seals.  In Adaptive AI every keeper reads you  -  and they all read the same you."), CX, LogoY + 112.f * S,
 		Ink, GEngine->GetMediumFont(), 1.25f * S, true);
 }
 
@@ -950,8 +1041,8 @@ void AHWHUD::DrawExplore(AHWOpenWorldGameMode* GM)
 	Text(Objective, 40.f * S, 34.f * S, Ink, Medium, 1.1f * S);
 	if (const UHWSaveGame* Save = GM->GetSave())
 	{
-		FString Right = Save->Mode == EHWPlayMode::Pathbreaker ? TEXT("PATHBREAKER") : (Save->Mode == EHWPlayMode::SixtySixDays ? TEXT("66 DAYS") : TEXT("HELLWALKER"));
-		if (Save->Mode == EHWPlayMode::SixtySixDays) { Right += FString::Printf(TEXT("   day %d  -  %d left"), UHWSaveGame::Days - Save->DaysLeft + 1, Save->DaysLeft); }
+		// The mode as players know it (a retired 66 Days walk plays, and reads, as Adaptive AI).
+		const FString Right = ModeLabel(Save->Mode == EHWPlayMode::Pathbreaker ? EHWTier::Pathbreaker : EHWTier::Hellwalker);
 		Text(Right, Canvas->ClipX - 40.f * S - TextWidth(Right, Medium, 1.f * S), 34.f * S, Save->Mode == EHWPlayMode::Pathbreaker ? Dim : Ember, Medium, 1.f * S);
 	}
 	if (!Prompt.IsEmpty())
@@ -1030,34 +1121,47 @@ void AHWHUD::DrawEnding(AHWOpenWorldGameMode* GM, UHWDuelSubsystem* Duel, bool b
 	else
 	{
 		Text(TEXT("THE SEALS ARE BROKEN"), CX, Y, Head, GEngine->GetLargeFont(), 2.6f * S, true);
-		Text(TEXT("The Warden read you the whole way to its gate.  You were harder to read than it was."), CX, Y + 110.f * S, Body, GEngine->GetMediumFont(), 1.3f * S, true);
-		if (const UHWSaveGame* Save = GM->GetSave())
+		const UHWSaveGame* EndSave = GM->GetSave();
+		const bool bNormalWalk = EndSave != nullptr && EndSave->Mode == EHWPlayMode::Pathbreaker;
+		Text(bNormalWalk ? TEXT("You learned their patterns and broke them, one keeper after another.")
+			: TEXT("The Warden read you the whole way to its gate.  You were harder to read than it was."), CX, Y + 110.f * S, Body, GEngine->GetMediumFont(), 1.3f * S, true);
+		if (const UHWSaveGame* Save = EndSave)
 		{
-			FString Line = FString::Printf(TEXT("%d min in the valley   -   %d death%s"), FMath::RoundToInt32(Save->PlaySeconds / 60.f), Save->Deaths, Save->Deaths == 1 ? TEXT("") : TEXT("s"));
-			if (Save->Mode == EHWPlayMode::SixtySixDays) { Line += FString::Printf(TEXT("   -   %d of 66 days spent"), UHWSaveGame::Days - Save->DaysLeft); }
+			const FString Line = FString::Printf(TEXT("%d min in the valley   -   %d death%s   -   %s"), FMath::RoundToInt32(Save->PlaySeconds / 60.f), Save->Deaths,
+				Save->Deaths == 1 ? TEXT("") : TEXT("s"), Save->Mode == EHWPlayMode::Pathbreaker ? TEXT("Normal") : TEXT("Adaptive AI"));
 			Text(Line, CX, Y + 160.f * S, Low, GEngine->GetMediumFont(), 1.1f * S, true);
 		}
 	}
-	if (Duel != nullptr)
+	const UHWSaveGame* WalkSave = GM->GetSave();
+	const bool bAdaptiveWalk = WalkSave == nullptr || WalkSave->Mode != EHWPlayMode::Pathbreaker;
+	if (Duel != nullptr && bAdaptiveWalk)
 	{
 		if (const UHWSessionSubsystem* Session = Duel->GetSession())
 		{
-			Y = Canvas->ClipY * 0.52f;
-			Text(TEXT("WHAT THEY LEARNED ABOUT YOU"), CX, Y, Low, GEngine->GetMediumFont(), 1.1f * S, true);
+			// What the keepers expect of you — shown only when they have a read (Normal's scripted keepers learn nothing).
 			const HW::EMoveId After[] = { HW::EMoveId::BFastSlash, HW::EMoveId::BHeavyCleave, HW::EMoveId::BFeintMid };
 			const TCHAR* Names[] = { TEXT("a fast swing"), TEXT("a heavy swing"), TEXT("a feint") };
+			TArray<FString> Rows;
 			for (int32 I = 0; I < 3; ++I)
 			{
 				HW::ESym Sym = HW::ESym::Neutral;
 				float P = 0.f;
 				if (!Session->PredictAnswer(After[I], Sym, P)) { continue; }
-				Text(FString::Printf(TEXT("against %s  -  %s  (%.0f%%)"), Names[I], *HumanSym(Sym).ToLower(), P * 100.f),
-					CX, Y + (40.f + 34.f * I) * S, Body, GEngine->GetMediumFont(), 1.1f * S, true);
+				Rows.Add(FString::Printf(TEXT("against %s  -  %s  (%.0f%%)"), Names[I], *HumanSym(Sym).ToLower(), P * 100.f));
+			}
+			if (Rows.Num() > 0)
+			{
+				Y = Canvas->ClipY * 0.52f;
+				Text(TEXT("WHAT THEY LEARNED ABOUT YOU"), CX, Y, Low, GEngine->GetMediumFont(), 1.1f * S, true);
+				for (int32 I = 0; I < Rows.Num(); ++I)
+				{
+					Text(Rows[I], CX, Y + (40.f + 34.f * I) * S, Body, GEngine->GetMediumFont(), 1.1f * S, true);
+				}
 			}
 		}
 	}
 	Text(PadActive() ? TEXT("[Start]  menu  -  Quit to title for a new walk")
-		: TEXT("[1] Pathbreaker     [2] Hellwalker     [3] 66 Days     -     a new walk        [Esc] menu"), CX, Canvas->ClipY * 0.86f, Low,
+		: TEXT("[1] Normal     [2] Adaptive AI     -     a new walk        [Esc] menu"), CX, Canvas->ClipY * 0.86f, Low,
 		GEngine->GetMediumFont(), 1.1f * S, true);
 }
 
@@ -1106,7 +1210,7 @@ void AHWHUD::DrawMenuFooter(AHWPlayerController* PC, const FHWMenu& M, float X, 
 		{
 		case EHWMenuPage::Settings: Hint = TEXT("Up / Down  select     Left / Right  change     Enter  accept     Esc  back     Q / E  tabs"); break;
 		case EHWMenuPage::Tutorial: Hint = TEXT("Left / Right  turn the page     Enter  next     Esc  close"); break;
-		case EHWMenuPage::Title:    Hint = TEXT("Up / Down  select     Enter  accept     1 / 2 / 3  a new walk"); break;
+		case EHWMenuPage::Title:    Hint = TEXT("Up / Down  select     Enter  accept     1 / 2  a new walk: Normal / Adaptive AI"); break;
 		case EHWMenuPage::Map:
 			Hint = FString::Printf(TEXT("Up / Down  keeper     Enter or click  track it     Wheel  zoom     Drag  pan     %s / Esc  close"),
 				*KeyName(static_cast<uint8>(EHWBind::Map), false));
@@ -1525,6 +1629,21 @@ void AHWHUD::DrawNotebookMenu(AHWPlayerController* PC, const FHWMenu& M)
 	Panel(PX, PY, PW, PH);
 	Text(M.GetInfo().Title, PX + Margin, PY + 26.f * S, Ink, GEngine->GetLargeFont(), 1.5f * S);
 	DrawRect(Ember, PX + Margin, PY + 84.f * S, 140.f * S, 3.f * S);
+	// How well it knows you (Adaptive AI's insight): what sets how hard the next keeper fights.
+	const UHWSessionSubsystem* Session = GetGameInstance() != nullptr ? GetGameInstance()->GetSubsystem<UHWSessionSubsystem>() : nullptr;
+	if (Session != nullptr && Session->GetPolicy() != nullptr && !Session->bBlind)
+	{
+		UFont* Small = GEngine->GetSmallFont();
+		const float Insight = Session->GetInsight();
+		const float Change = Session->GetLastInsightChange();
+		const float Right = PX + PW - Margin;
+		const FString Head = FString::Printf(TEXT("HOW WELL IT KNOWS YOU   %.0f%%"), Insight * 100.f);
+		Text(Head, Right - TextWidth(Head, Small, 1.15f * S), PY + 30.f * S, Gold, Small, 1.15f * S);
+		const float BW = 260.f * S;
+		Bar(Right - BW, PY + 56.f * S, BW, 6.f * S, Insight, Insight >= 0.5f ? Crimson : WithAlpha(Ember, 0.7f), BackBar);
+		const FString Sub = InsightChangeText(Change, TEXT("after the last fight")) + TEXT("  -  the better it knows you, the harder it fights");
+		Text(Sub, Right - TextWidth(Sub, Small, 0.95f * S), PY + 68.f * S, Change > 0.005f ? Ember : (Change < -0.005f ? Teal : Dim), Small, 0.95f * S);
+	}
 	DrawNotebookPage(PX + Margin, PY + 108.f * S, PW - 2.f * Margin, PH - 108.f * S - 150.f * S);
 	DrawButtonRow(M, PX + PW * 0.5f, PY + PH - 104.f * S, 210.f * S, 50.f * S, !M.IsConfirming());
 	DrawMenuFooter(PC, M, PX + Margin, PY + PH - 38.f * S, PW - 2.f * Margin, true);
@@ -1824,14 +1943,14 @@ void AHWHUD::DrawNotebookPage(float X, float Y, float W, float H)
 	if (Session == nullptr || Session->GetPolicy() == nullptr)
 	{
 		Text(TEXT("No keeper is reading you"), CX, Y + H * 0.38f, Ink, Medium, 1.35f * S, true);
-		Text(TEXT("The Hellwalker keepers fill this notebook. Without their model the duels are scripted - nothing is written down."),
+		Text(TEXT("The Adaptive AI keepers fill this notebook. Without their model the duels are scripted - nothing is written down."),
 			CX, Y + H * 0.38f + 46.f * S, Dim, Medium, 1.0f * S, true);
 		return;
 	}
 	if (Book->Predictions == 0 && Session->GetMemory().NumTokens == 0)
 	{
 		Text(TEXT("The notebook fills as the keepers read you"), CX, Y + H * 0.38f, Ink, Medium, 1.35f * S, true);
-		Text(TEXT("Fight a Hellwalker keeper: every exchange is written down - what it threw, how you answered, whether it saw you coming."),
+		Text(TEXT("Fight in Adaptive AI: every exchange is written down - what it threw, how you answered, whether it saw you coming."),
 			CX, Y + H * 0.38f + 46.f * S, Dim, Medium, 1.0f * S, true);
 		return;
 	}
@@ -1848,7 +1967,7 @@ void AHWHUD::DrawNotebookPage(float X, float Y, float W, float H)
 		{ HW::EMoveId::BFastSlash, TEXT("a fast slash") }, { HW::EMoveId::BSweepLeft, TEXT("a sweep to your left") },
 		{ HW::EMoveId::BSweepRight, TEXT("a sweep to your right") }, { HW::EMoveId::BHeavyCleave, TEXT("a heavy cleave") },
 		{ HW::EMoveId::BDelayedHeavy, TEXT("a delayed heavy") }, { HW::EMoveId::BFeintMid, TEXT("a feint") },
-		{ HW::EMoveId::BGrab, TEXT("a grab") }, { HW::EMoveId::BKillerThrust, TEXT("the red killer thrust") },
+		{ HW::EMoveId::BGrab, TEXT("a grab") }, { HW::EMoveId::BKillerThrust, TEXT("the violet killer thrust") },
 	};
 	float RY = Ty + 34.f * S;
 	for (const FRow& Row : Rows)
@@ -1946,12 +2065,11 @@ void AHWHUD::DrawNotebookLine(UHWDuelSubsystem* Duel, float CX, float Y)
 		Text(FString::Printf(TEXT("It called your answer right %.0f%% of the time this session  -  the notebook: [%s]"), Book.Accuracy() * 100.f,
 			*KeyName(static_cast<uint8>(EHWBind::Notebook), PadActive())), CX, Y, Dim, GEngine->GetMediumFont(), 1.f * S, true);
 	}
-	const float Change = Session->GetLastAdaptiveChange();
-	if (Duel->IsKeeperAdaptive())
-	{
-		Text(FString::Printf(TEXT("The keeper adapts: skill %.2f -> %.2f"), Session->GetAdaptiveSkill() - Change, Session->GetAdaptiveSkill()), CX, Y + 32.f * S,
-			Change < 0.f ? Teal : (Change > 0.f ? Ember : Dim), GEngine->GetMediumFont(), 1.f * S, true);
-	}
+	// Adaptive AI's learning arc: the better it knows you, the stronger the next keeper (a trick repeated drives it up, a
+	// new one makes its calls wrong and it falls back).
+	const float Change = Session->GetLastInsightChange();
+	Text(FString::Printf(TEXT("How well it knows you: %.0f%%  -  %s"), Session->GetInsight() * 100.f, *InsightChangeText(Change, TEXT("after this fight"))),
+		CX, Y + 32.f * S, Change > 0.005f ? Ember : (Change < -0.005f ? Teal : Dim), GEngine->GetMediumFont(), 1.f * S, true);
 }
 
 void AHWHUD::DrawConfirm(AHWPlayerController* PC, const FHWMenu& M)

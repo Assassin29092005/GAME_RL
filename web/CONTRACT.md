@@ -1,6 +1,11 @@
-# HellwalkerRL telemetry contract (v1)
+# HellwalkerRL telemetry contract (v2)
 
 The game, the website, the mock server and the Firestore rules all follow this file. Change it first, then them.
+
+Versions: **v2** (game 1.4.0) adds five required fields to `fights/{id}` — `assist`, `slowmoScale`,
+`keeperDamageScale`, `parryWindowFrames`, `insight` — and gives `adaptive` a new meaning. **v1** fights (games before
+1.4.0) stay valid forever: a game uploads its offline queue unchanged whenever it next gets through. The `players` and
+`surveys` documents are unchanged (still `v: 1`). See "Fight schema versions" below.
 
 **Purpose.** Research data for the HellwalkerRL paper: how players fare against the RL keeper and how they feel about it.
 No accounts and no login window: each install signs in to Firebase **anonymously** (invisible), gets a random user id
@@ -49,25 +54,25 @@ send time.
 
 | field | type | meaning |
 |---|---|---|
-| `v` | int | 1 |
+| `v` | int | 2 (1 from games before 1.4.0) |
 | `player` | string | uid (must equal the signed-in uid) |
 | `at` | timestamp | server time (transform `setToServerValue: REQUEST_TIME`) |
 | `clientTime` | timestamp | the game's clock |
 | `session` | string | random per game launch (32 hex) |
 | `fightInSession` | int | 1, 2, … within this launch |
-| `gameVersion` | string | e.g. `"1.2.0"` |
+| `gameVersion` | string | e.g. `"1.4.0"` |
 | `mode` | string | `"openworld"` or `"arena"` |
-| `playMode` | string | `"pathbreaker"`, `"hellwalker"`, `"66days"` (open world) or `"arena"` |
-| `brain` | string | `"rl"` (the RL keeper) or `"script"` (Pathbreaker) |
+| `playMode` | string | open world: `"pathbreaker"` (shown in the game as **Normal**: all three keepers scripted) or `"hellwalker"` (shown as **Adaptive AI**: the RL keepers that learn the player); `"arena"` for the duel-only map. `"66days"` comes only from games before 1.4.0 (the mode was removed; its saves now play, and report, as `"hellwalker"`) |
+| `brain` | string | `"rl"` (the RL keeper) or `"script"` (the scripted keeper; also Adaptive AI when no trained model could be loaded) |
 | `keeper` | int | 0 Warden, 1 Sage, 2 Returned |
 | `keeperName` | string | the boss title shown to the player |
-| `difficulty` | string | `Easy`, `Normal`, `Hard`, `Hellwalker`, `Adaptive` |
-| `skill` | double | the keeper's skill this fight (0..1) |
-| `adaptive` | bool | Adaptive difficulty |
+| `difficulty` | string | `Easy`, `Normal`, `Hard`, `Hellwalker`; `Adaptive` only from games before 1.4.0 |
+| `skill` | double | the keeper's skill this fight (0..1): for the RL keeper between the difficulty's SkillLo and SkillHi, higher the more `insight` it has (table below); 1 for the script (it has no skill) |
+| `adaptive` | bool | v2: the keeper's skill was set by the insight ramp — true for every RL fight, false for the script. v1: the old Adaptive difficulty was on |
 | `result` | string | `"win"` (player won), `"loss"`, `"timeout"`, `"quit"` |
-| `seconds` | double | fight length |
+| `seconds` | double | fight length in **simulated** time (duel frames / 60): slow motion and hit-stop do not lengthen it |
 | `playerHealth`, `keeperHealth` | double | fraction of health left (0..1) |
-| `dmgDealt`, `dmgTaken` | double | damage the player dealt / took |
+| `dmgDealt`, `dmgTaken` | double | health damage the player dealt / took; `dmgTaken` is after `keeperDamageScale` (sha-chi drain is not damage) |
 | `playerSwings`, `playerHits` | int | player attacks committed / that hit |
 | `keeperSwings`, `keeperHits` | int | keeper attacks / that hit the player |
 | `keeperBlocked`, `keeperParried`, `keeperWhiffed` | int | keeper attacks the player blocked / **parried** / dodged or that missed |
@@ -79,6 +84,48 @@ send time.
 | `predictions`, `predictionsCorrect`, `confident`, `confidentCorrect` | int | the keeper's read head this fight (FRLNotebook); 0 for the script |
 | `expected` | array of 8 maps `{attack: string, answer: string, p: double}` | what the keeper expects you to do against each of its 8 attacks, after this fight (empty array for the script) |
 | `answers` | map `{fast|heavy|feint|killer: {<answer>: int}}` | what the player actually did against each kind of keeper swing this fight; answers `parry, block, stepL, stepR, stepB, stepF, attack, none` |
+| `assist` | string | **v2.** The parry assist the fight ran with: `"off"`, `"ring"` (a red ring around the keeper's weapon hand, lit exactly while a parry press would succeed) or `"ring+slowmo"` (the ring, and the duel slows while it is lit; the default setting) |
+| `slowmoScale` | double | **v2.** 0 < x ≤ 1: the duel's speed while the ring was lit (the difficulty's slow-motion scale, e.g. 0.6 on Normal); exactly 1 unless `assist` is `"ring+slowmo"` |
+| `keeperDamageScale` | double | **v2.** 0 < x ≤ 2: what the keeper's health damage to the player (hits and blocked chip damage) was multiplied by — the difficulty's, e.g. 0.75 on Normal; never the sha-chi drain, never the player's damage |
+| `parryWindowFrames` | int | **v2.** 1..60: the parry window in frames at 60 fps (a press this many frames or fewer before the impact parries; 12 in 1.4.0) |
+| `insight` | double | **v2.** 0..1: how well the keeper knew the player when this fight began (below); 0 for the script |
+
+All five v2 fields are fixed when the fight starts (a change in the settings applies from the next fight).
+
+**Difficulty presets (1.4.0)** — damage scale and assist apply in both play modes, the skill range only to Adaptive AI:
+
+| difficulty | skill (insight 0 → 1) | `keeperDamageScale` | slow-motion scale | incoming-attack glow |
+|---|---|---|---|---|
+| Easy | 0.00 → 0.40 | 0.60 | 0.40 | on |
+| Normal (default) | 0.00 → 0.70 | 0.75 | 0.60 | off |
+| Hard | 0.15 → 0.85 | 0.85 | 0.75 | off |
+| Hellwalker | 0.30 → 1.00 | 0.90 | 0.85 | off |
+
+**Insight** (Adaptive AI only) is the keeper's measured knowledge of this player, and its strength follows it. It starts
+at 0 every game session (and when the game forgets the player, `hw.ResetModel`), carries over from keeper to keeper, and
+after every RL fight moves part of the way towards how accurately the keeper's read head called the player's answers
+to its ATTACKS (fast, heavy, feint, killer) since the last recorded fight — so a restarted, abandoned fight counts too.
+That is not the uploaded `predictionsCorrect / predictions`, which covers every kind of keeper move and the fight alone.
+The accuracy is normalised between 0.40 (a near-random player) and 0.70 (a solved one) to a target capped at 0.95, and
+each fight moves insight toward it with weight N / (N + 8) for N such calls, times 0.45 when rising and 0.55 when
+falling (HW::FRLInsight, RL/DESIGN.md §14). Repeating one trick
+drives it up over about four or five fights; changing tricks makes the predictions wrong and it decays again. The next
+fight's skill, sampling randomness (high while it does not know the player, none once it does) and breathing room
+between its swings all follow from it. `insight` is the value the fight began with, so a session's first RL fight
+reports 0.
+
+#### Fight schema versions
+
+| `v` | sent by | keys |
+|---|---|---|
+| 1 | games before 1.4.0 | exactly the table's keys except the five v2 fields (39) |
+| 2 | games 1.4.0+ | the 39 v1 keys and all five v2 fields (44) |
+
+Anything else is refused: a v1 fight carrying any v2 field, a v2 fight missing one, any other `v`. Readers (the site,
+`web/dev/export.py`) take a v1 fight as `assist` `"off"`, `slowmoScale` 1, `keeperDamageScale` 1, `parryWindowFrames`
+12 (every build that sent telemetry before 1.4.0 had the 12-frame window), `insight` unknown (not 0), and `adaptive`
+in its v1 meaning. Deployment order: publish the v2 rules **before** distributing a 1.4.0 build — rules that only know
+v1 refuse every v2 fight, and the game drops a fight the server refused three times (web/README.md).
 
 ### `players/{uid}` — one per install (public read, owner write)
 
@@ -103,7 +150,9 @@ REQUEST_TIME and `increment` on every `totals.*`, `keepers.<name>.fights|wins` a
 Uploads that fail (offline) are queued in the save slot and retried at the next fight and at start-up. Never uploaded:
 fights played by the autoplay bot, parity runs, fights touched by hw.Kill / hw.InjectParry / hw.Hold, and scripted
 launches (-unattended, -HWExec) — unless a mock endpoint and -HWTelemetryAllowAutoplay are both given (tests, which also
-use their own save slot).
+use their own save slot). In those test uploads: the autoplay bot, parity runs and `-benchmark` fight with the assist
+off and `keeperDamageScale` 1 (a parity run also with the keeper at skill 1, no sampling randomness and no breather);
+scripted launches have the assist off unless `-HWParryAssist=RingSlow|Ring|Off` is given.
 
 ### `surveys/{uid}` — private (owner only)
 
@@ -123,8 +172,10 @@ game quits, as always.
 
 - `players/{uid}`: read public; create/update only by `uid` itself, schema-checked (types, ranges, counts ≥ 0,
   `createdAt` immutable after create); no delete.
-- `fights/{id}`: read public; create only with `player == request.auth.uid` and a valid schema; never updated; delete
-  only by its owner (reset).
+- `fights/{id}`: read public; create only with `player == request.auth.uid` and a valid schema — v1 with exactly the
+  v1 keys, or v2 with exactly the v2 keys and the v2 ranges (`assist` one of the three; `slowmoScale` a number in (0, 1],
+  1 unless `"ring+slowmo"`; `keeperDamageScale` a number in (0, 2]; `parryWindowFrames` an int in 1..60; `insight` a
+  number in 0..1); never updated; delete only by its owner (reset).
 - `surveys/{uid}`: read/write only by `uid`.
 - Everything else denied.
 Indexes: `fights` (`player` ASC, `at` DESC) for the profile's recent fights.

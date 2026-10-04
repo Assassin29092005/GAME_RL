@@ -69,3 +69,6 @@ RL/native/out_harness/
 
 # Cooker by-products (Tools\Package.bat)
 Build/Windows/FileOpenOrder/
+
+# IDE settings (JetBrains)
+.idea/

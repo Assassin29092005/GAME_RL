@@ -68,8 +68,9 @@ namespace HW
 		};
 		/** Skill clamped to [0, 1]: perception 16 -> 6 frames, decision gap 12 -> 6, strings 1 / 2 / 3, cooldowns x2 -> x1. */
 		FSkillParams SkillParams(float Skill);
-		/** The game's Easy: skill 0, sampled, and at least this many frames from one keeper attack's commit to its next opener (FRLConfig::MinSwingGap)
-		 *  — tuned so Easy deals less than the script (eval.py ladder: easy_below_script). Not part of the observation. */
+		/** The pre-insight Easy (until 2026-10-04): skill 0, sampled, and at least this many frames from one keeper attack's commit to
+		 *  its next opener (FRLConfig::MinSwingGap) — tuned so Easy dealt less than the script (eval.py's fixed-skill ladder:
+		 *  easy_below_script). The game now sets the gap from FRLInsight (210 frames at insight 0). Not part of the observation. */
 		constexpr int32_t EasySwingGap = 84;
 		/** The aggression floor's target at a skill: Base (the skill-1 target, 66 swings/min) minus up to 16 at skill 0. */
 		float TargetSwingsPerMin(float BaseTarget, float Skill);

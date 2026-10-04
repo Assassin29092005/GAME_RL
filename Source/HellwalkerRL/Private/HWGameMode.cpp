@@ -91,7 +91,9 @@ void AHWGameMode::StartPlay()
 	{
 		if (FParse::Value(Cmd, TEXT("HWTier="), Value))
 		{
-			Session->Tier = Value.Equals(TEXT("Pathbreaker"), ESearchCase::IgnoreCase) ? EHWTier::Pathbreaker : EHWTier::Hellwalker;
+			// Pathbreaker = the mode shown as Normal (the script); anything else (Hellwalker, Adaptive) is Adaptive AI.
+			const bool bScript = Value.Equals(TEXT("Pathbreaker"), ESearchCase::IgnoreCase) || Value.Equals(TEXT("Normal"), ESearchCase::IgnoreCase);
+			Session->Tier = bScript ? EHWTier::Pathbreaker : EHWTier::Hellwalker;
 		}
 		Session->bBlind = FParse::Param(Cmd, TEXT("HWBlind"));
 	}

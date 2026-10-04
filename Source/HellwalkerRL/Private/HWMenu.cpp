@@ -5,6 +5,29 @@ namespace HWMenuIds
 	const FName SlidePrev(TEXT("SlidePrev"));
 	const FName SlideNext(TEXT("SlideNext"));
 	const FName SlidesDone(TEXT("SlidesDone"));
+	const FName NewNormal(TEXT("NewPathbreaker"));
+	const FName NewAdaptive(TEXT("NewHellwalker"));
+}
+
+// =================================================================================================
+// The title's new walks
+// =================================================================================================
+
+void HWTitle::AddNewWalkItems(TArray<FHWMenuItem>& Out, const FString& Confirm)
+{
+	struct FNew { const FName* Id; const TCHAR* Label; const TCHAR* Hint; EHWMenuTone Tone; const TCHAR* Key; };
+	const FNew News[] = {
+		{ &HWMenuIds::NewNormal, TEXT("Normal"), TEXT("The keepers fight in fixed patterns.  Learn them, and they stay learned."), EHWMenuTone::Normal, TEXT("1") },
+		{ &HWMenuIds::NewAdaptive, TEXT("Adaptive AI"), TEXT("The keepers learn you.  A trick that works at first stops working."), EHWMenuTone::Crimson, TEXT("2") },
+	};
+	for (const FNew& N : News)
+	{
+		FHWMenuItem I = FHWMenuItem::Action(*N.Id, FString::Printf(TEXT("New walk:  %s"), N.Label), N.Hint);
+		I.Tone = N.Tone;
+		I.Shortcut = N.Key;
+		I.Confirm = Confirm;
+		Out.Add(I);
+	}
 }
 
 // =================================================================================================
@@ -417,10 +440,10 @@ void FHWMenu::EnsureVisible(int32 VisibleRows)
 namespace HWTutorial
 {
 	static const FSlide GSlides[] = {
-		{ TEXT("TRAINED FROM NOTHING"),
-		  TEXT("The keeper is a neural network. It learned to fight by playing over a billion decisions against simulated players - "
-		       "and against players trained only to beat it - starting from random moves. There is no script and no hand-written rule "
-		       "telling it what to do - only what it learned wins.") },
+		{ TEXT("TWO MODES"),
+		  TEXT("In Normal the keepers fight in fixed patterns: learn them, and they stay learned. In Adaptive AI the keeper is a neural "
+		       "network that taught itself to fight - over a billion decisions against simulated players, starting from random moves, "
+		       "with no script and no hand-written rule - and it learns YOU as you fight. A trick that works at first stops working.") },
 		{ TEXT("IT SEES YOU A TENTH OF A SECOND LATE"),
 		  TEXT("Like a person reading your animations, it sees what your body is doing about 0.1 s after it happens. It never sees "
 		       "your buttons: a press you have not shown yet is invisible to it.") },
@@ -431,12 +454,14 @@ namespace HWTutorial
 		  TEXT("READ flashes only AFTER one of its counters has landed on the answer it predicted. It tells you what it expected you to "
 		       "do. It never warns you what is coming.") },
 		{ TEXT("HABITS ARE WHAT IT FEEDS ON"),
-		  TEXT("Always parry the fast slash, always dodge left after a heavy - it will notice, and throw the counter. Vary your answers. "
+		  TEXT("Always parry the fast slash, always dodge left after a heavy - it will notice, and throw the counter. It gets surer of you "
+		       "the more your answers repeat, and the surer it is, the harder it fights. Change your tricks and it has to learn you again. "
 		       "The keeper's notebook (in the pause menu) shows what it has written down about you.") },
-		{ TEXT("DIFFICULTY, AND THREE KEEPERS"),
-		  TEXT("At lower difficulty it sees you later and strikes fewer times in a row. Adaptive changes its strength between fights to "
-		       "keep them close. The Warden, the Sage and the Returned each fight their own way - but all three read the same you. "
-		       "A clean parry stuns it and buys you a breath before it can strike again.\n\n"
+		{ TEXT("DIFFICULTY, PARRIES, THREE KEEPERS"),
+		  TEXT("Difficulty sets how hard the keepers hit and, in Adaptive AI, how strong they grow once they know you. The parry assist "
+		       "lights a red ring on the keeper's weapon exactly while a parry would land; violet marks an attack no parry stops. "
+		       "A clean parry stuns it and buys you a breath. The Warden, the Sage and the Returned each fight their own way - but all "
+		       "three read the same you.\n\n"
 		       "Anonymous gameplay stats are sent for research. See or reset yours on the website.") },
 	};
 

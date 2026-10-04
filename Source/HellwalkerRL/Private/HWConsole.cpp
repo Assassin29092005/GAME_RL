@@ -50,12 +50,12 @@ namespace
 
 	FAutoConsoleCommandWithWorldAndArgs GHWTier(
 		TEXT("hw.Tier"),
-		TEXT("hw.Tier pathbreaker|hellwalker - start a new encounter at that tier (same brain, adaptation flag off/on)."),
+		TEXT("hw.Tier normal|adaptive - start a new encounter in that mode: Normal (the scripted keeper) or Adaptive AI (the RL keeper); pathbreaker|hellwalker also work."),
 		FConsoleCommandWithWorldAndArgsDelegate::CreateLambda([](const TArray<FString>& Args, UWorld* World)
 		{
 			UHWDuelSubsystem* D = DuelOf(World);
 			if (D == nullptr || Args.Num() == 0) { return; }
-			D->StartEncounter(Args[0].Equals(TEXT("pathbreaker"), ESearchCase::IgnoreCase) ? EHWTier::Pathbreaker : EHWTier::Hellwalker);
+			D->StartEncounter((Args[0].Equals(TEXT("pathbreaker"), ESearchCase::IgnoreCase) || Args[0].Equals(TEXT("normal"), ESearchCase::IgnoreCase)) ? EHWTier::Pathbreaker : EHWTier::Hellwalker);
 		}));
 
 	FAutoConsoleCommandWithWorldAndArgs GHWInjectParry(

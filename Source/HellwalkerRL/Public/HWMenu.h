@@ -133,6 +133,16 @@ namespace HWMenuIds
 	extern HELLWALKERRL_API const FName SlideNext;
 	/** Emitted (Activated) by SlideNext on the last slide. */
 	extern HELLWALKERRL_API const FName SlidesDone;
+	/** The title's new walks (HWTitle::AddNewWalkItems): Normal (EHWPlayMode::Pathbreaker) and Adaptive AI (Hellwalker). */
+	extern HELLWALKERRL_API const FName NewNormal;
+	extern HELLWALKERRL_API const FName NewAdaptive;
+}
+
+/** The title page's new walks (pure, tested): "[1] New walk: Normal" and "[2] New walk: Adaptive AI". */
+namespace HWTitle
+{
+	/** Appends the two items; Confirm (non-empty when a saved walk exists) is asked before one erases it. */
+	HELLWALKERRL_API void AddNewWalkItems(TArray<FHWMenuItem>& Out, const FString& Confirm);
 }
 
 class HELLWALKERRL_API FHWMenu

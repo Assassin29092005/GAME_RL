@@ -117,9 +117,10 @@ namespace
 		B.C.TrailSocket = TEXT("FX_Trail_R_02");
 		B.C.SurveyPath = TEXT("/Game/ParagonSevarog/Characters/Heroes/Sevarog/Animations");
 		B.C.TrailSystem = TEXT("/Game/SlashTrail_SoftTofu/Niagara/Dark/NS_SlashTrail_Dark_Loop.NS_SlashTrail_Dark_Loop");
-		B.C.TrailColor = FLinearColor(0.3f, 1.f, 0.5f);   // Sevarog's soul-green; killer moves turn it red
+		B.C.TrailColor = FLinearColor(0.3f, 1.f, 0.5f);   // Sevarog's soul-green; killer moves turn it violet
 		B.C.TrailWidth = 160.f;
 		B.C.TrailSockets = { TEXT("FX_Trail_R_01") };
+		B.C.TelegraphSockets = { TEXT("hand_r") };
 
 		const TCHAR* S = TEXT("/Game/ParagonSevarog/Characters/Heroes/Sevarog/Animations/");
 		B.Role(EHWAnimRole::Idle, Loop(S, TEXT("Idle")));
@@ -179,6 +180,7 @@ namespace
 		B.C.TrailColor = FLinearColor(1.f, 0.7f, 0.2f);
 		B.C.TrailWidth = 140.f;
 		B.C.TrailSockets = { TEXT("FX_Staff_Tip_A") };
+		B.C.TelegraphSockets = { TEXT("hand_r") };
 
 		const TCHAR* W = TEXT("/Game/ParagonSunWukong/Characters/Heroes/Wukong/Animations/");
 		B.Role(EHWAnimRole::Idle, Loop(W, TEXT("Idle")));
@@ -237,6 +239,7 @@ namespace
 		B.C.TrailColor = FLinearColor(1.f, 0.35f, 0.08f);  // the lava in its cracks
 		B.C.TrailWidth = 170.f;
 		B.C.TrailSockets = { TEXT("hand_r"), TEXT("hand_l") };
+		B.C.TelegraphSockets = { TEXT("hand_r"), TEXT("hand_l") }; // it strikes with both fists
 
 		const TCHAR* F = TEXT("/Game/Fighter_Animations/Animation/Sequence2/");
 		B.Role(EHWAnimRole::Idle, Loop(F, TEXT("01_Idle/Idle_Combat_Seq")));

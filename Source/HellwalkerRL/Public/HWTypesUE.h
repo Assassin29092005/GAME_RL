@@ -6,12 +6,12 @@
 #include "HWCore/HWTypes.h"
 #include "HWTypesUE.generated.h"
 
-/** Difficulty tier — one brain, one flag (PLAN B1/B4). */
+/** Which brain fights (PLAN B1/B4). Shown to players as the modes: Pathbreaker = "Normal", Hellwalker = "Adaptive AI". */
 UENUM(BlueprintType)
 enum class EHWTier : uint8
 {
-	Pathbreaker UMETA(DisplayName = "Pathbreaker (scripted)"),
-	Hellwalker  UMETA(DisplayName = "Hellwalker (adaptive)")
+	Pathbreaker UMETA(DisplayName = "Normal (scripted)"),
+	Hellwalker  UMETA(DisplayName = "Adaptive AI (the RL keeper)")
 };
 
 /** Mirror of HW::EHitOutcome — raised once per swing (PLAN §5.4). */
@@ -27,14 +27,21 @@ enum class EHWPlayerAction : uint8
 	Light, Heavy, Parry, Step, Switch, GuardDown, GuardUp
 };
 
-/** Open world difficulty (the research's tiers): 66 Days is Hellwalker with 66 lives and permadeath. */
+/**
+ * The open world's two play modes (the research's arms; the names stay for saves and telemetry): Pathbreaker is shown as
+ * "Normal" (every keeper scripted), Hellwalker as "Adaptive AI" (the RL keepers that learn you). SixtySixDays is retired
+ * (1.4): kept so old saves load — as Adaptive AI (UHWSaveGame::LoadOrNull).
+ */
 UENUM(BlueprintType)
 enum class EHWPlayMode : uint8
 {
-	Pathbreaker UMETA(DisplayName = "Pathbreaker"),
-	Hellwalker  UMETA(DisplayName = "Hellwalker"),
-	SixtySixDays UMETA(DisplayName = "66 Days")
+	Pathbreaker UMETA(DisplayName = "Normal"),
+	Hellwalker  UMETA(DisplayName = "Adaptive AI"),
+	SixtySixDays UMETA(Hidden)
 };
+
+/** The modes' display names: "Normal" / "Adaptive AI" (a retired 66 Days walk plays, and reads, as Adaptive AI). */
+inline FString PlayModeName(EHWPlayMode M) { return M == EHWPlayMode::Pathbreaker ? FString(TEXT("Normal")) : FString(TEXT("Adaptive AI")); }
 
 UENUM(BlueprintType)
 enum class EHWEncounterState : uint8

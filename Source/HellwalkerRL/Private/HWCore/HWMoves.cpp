@@ -67,7 +67,7 @@ namespace HW
 				M = MakeAttack("GlaiveHeavy", EMoveId::GHeavy, ESide::Player, ESym::Heavy, 26, 8, 32, 48, 66.f, 40.f, 300.f, 110.f);
 				M.Weapon = 1; M.HyperArmorFrom = 12; Put(M);
 			}
-			// ---------------- Player: parry — press frame is t=0, live t=1..8, then whiff recovery
+			// ---------------- Player: parry — press frame is t=0, live t=1..12 (ParryWindowFrames), then 16 frames of whiff recovery
 			{
 				FMoveData M;
 				M.Name = "Parry"; M.Id = EMoveId::PParry; M.Kind = EMoveKind::Parry; M.Owner = ESide::Player; M.Symbol = ESym::Parry;
@@ -117,8 +117,10 @@ namespace HW
 			{
 				// Feints: a fake swing "arrives" at FakeImpactFrame with no hitbox; the real strike lands later,
 				// after a parry pressed at the fake has closed and inside its whiff recovery.
-				// A parry pressed at boss-frame d is live d+1..d+8, whiff recovery to d+24.
-				// Early (real 26) baits d in [2,17]; Mid (real 32) d in [8,23]; Late (real 40) d in [16,31].
+				// A parry pressed at boss-frame d is live d+1..d+12, whiff recovery to d+28: it is baited when the real
+				// impact R falls after the window and inside the recovery, d in [R-28, R-13].
+				// Early (real 26) baits d in [0,13]; Mid (real 32) d in [4,19]; Late (real 40) d in [12,27] — each
+				// covers a parry aimed a few frames before its fake (12 / 18 / 24).
 				FMoveData M = MakeAttack("FeintEarly", EMoveId::BFeintEarly, ESide::Boss, ESym::BFeint, 26, 5, 22, 44, 30.f, 20.f, 250.f, 90.f);
 				M.FakeImpactFrame = 12; Put(M);
 				M = MakeAttack("FeintMid", EMoveId::BFeintMid, ESide::Boss, ESym::BFeint, 32, 5, 22, 50, 30.f, 20.f, 250.f, 90.f);

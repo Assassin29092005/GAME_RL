@@ -377,6 +377,27 @@ FVector AHWCharacterBase::GetBladeTip() const
 	return B->GetComponentLocation() + B->GetForwardVector() * Half;
 }
 
+void AHWCharacterBase::GetTelegraphPoints(TArray<FVector>& Out) const
+{
+	Out.Reset();
+	if (IsSkeletal())
+	{
+		// The drawn body first (a retargeted look poses its own hands), then the driver underneath.
+		const USkeletalMeshComponent* Drawn = GetDrawnMesh();
+		const USkeletalMeshComponent* Driver = GetMesh();
+		for (const FName& Socket : AnimSet->TelegraphSockets)
+		{
+			if (Drawn != nullptr && Drawn->DoesSocketExist(Socket)) { Out.Add(Drawn->GetSocketLocation(Socket)); }
+			else if (Driver != nullptr && Driver->DoesSocketExist(Socket)) { Out.Add(Driver->GetSocketLocation(Socket)); }
+		}
+		if (Out.Num() == 0) { Out.Add(GetBladeTip()); }
+		return;
+	}
+	// The greybox: the blade itself (the guandao's head, the glaive, the twin blade).
+	const UStaticMeshComponent* B = (BladeAlt != nullptr && BladeAlt->IsVisible()) ? BladeAlt.Get() : Blade.Get();
+	Out.Add(B != nullptr ? B->GetComponentLocation() : GetActorLocation() + FVector(0.f, 0.f, 60.f));
+}
+
 void AHWCharacterBase::Tick(float DeltaSeconds)
 {
 	Super::Tick(DeltaSeconds);
@@ -625,9 +646,9 @@ void AHWCharacterBase::UpdateColors(const HW::FFighter& F, float DeltaSeconds)
 		const HW::FMoveData& M = F.CurrentMove();
 		if (M.IsAttack() && M.bUnblockable && F.T < M.Startup + M.Active)
 		{
-			// Killer move: the red telegraph. Cannot be blocked or parried — step.
-			Body = FMath::Lerp(BodyColor, FLinearColor(1.f, 0.03f, 0.02f), 0.55f + 0.45f * Pulse);
-			BladeC = FLinearColor(1.f, 0.1f, 0.05f);
+			// Killer move: the violet telegraph. Cannot be blocked or parried — step. (Red is the parry assist's "parry now".)
+			Body = FMath::Lerp(BodyColor, FLinearColor(0.62f, 0.30f, 1.f), 0.55f + 0.45f * Pulse);
+			BladeC = FLinearColor(0.68f, 0.36f, 1.f);
 		}
 		if (F.HasHyperArmor())
 		{
@@ -750,7 +771,7 @@ void AHWCharacterBase::TickSkeletal(const HW::FFighter& F, const UHWDuelSubsyste
 		const bool bWant = bSwing && (!HandWeapons.IsValidIndex(I) || HandWeapons[I]->IsVisible());
 		if (bWant && !T->IsActive())
 		{
-			const FLinearColor C = (bKiller ? FLinearColor(1.f, 0.05f, 0.02f) : AnimSet->TrailColor) * 3.f;
+			const FLinearColor C = (bKiller ? FLinearColor(0.62f, 0.30f, 1.f) : AnimSet->TrailColor) * 3.f; // violet: unblockable
 			T->SetVariableVec3(TEXT("User.Color_"), FVector(C.R, C.G, C.B));
 			T->Activate(true);
 		}
@@ -771,7 +792,7 @@ FLinearColor AHWCharacterBase::TelegraphColor(const HW::FFighter& F) const
 		const HW::FMoveData& M = F.CurrentMove();
 		if (M.IsAttack() && M.bUnblockable && F.T < M.Startup + M.Active)
 		{
-			Add(FLinearColor(1.f, 0.04f, 0.02f), 0.3f + 0.3f * Pulse); // killer move: step, do not block
+			Add(FLinearColor(0.62f, 0.30f, 1.f), 0.3f + 0.3f * Pulse); // killer move (violet): step, do not block
 		}
 		if (F.HasHyperArmor()) { Add(FLinearColor(1.f, 0.45f, 0.05f), 0.1f); }
 		if (F.IsParryLive() || F.IsCounterLive()) { Add(FLinearColor(0.5f, 0.9f, 1.f), 0.15f); }

@@ -5,9 +5,9 @@
 // The Firebase web API key is not a secret - the security is web/firebase/firestore.rules - but restrict it to the
 // Identity Toolkit API, the Token Service API and the Cloud Firestore API in the Google Cloud console (README step 6).
 export default {
-	apiKey: "",     // Firebase web API key (Project settings -> General -> Web API key)
-	projectId: "",  // Firebase project id, e.g. "hellwalker-research"
+	apiKey: "AIzaSyCUouUIPNeibuViQB7MuphwwEv2qfrrbUo",     // Firebase web API key (Project settings -> General -> Web API key)
+	projectId: "game-rl-c6d37",  // Firebase project id, e.g. "hellwalker-research"
 	itchUrl: "",    // the game's itch.io page, e.g. "https://yourname.itch.io/hellwalker"
-	siteUrl: "",    // where this site is hosted, e.g. "https://hellwalker.onrender.com" (the game opens {siteUrl}/#/me?t=...)
+	siteUrl: "https://hellwalker-site.onrender.com",    // where this site is hosted, e.g. "https://hellwalker.onrender.com" (the game opens {siteUrl}/#/me?t=...)
 	contact: "",    // research contact shown on #/research (an email address or a URL)
 };

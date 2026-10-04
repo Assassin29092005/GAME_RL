@@ -224,6 +224,7 @@ namespace HW
 		case EHitOutcome::Blocked:
 		{
 			Damage = M.Damage * K.BlockChip;
+			if (Attacker == ESide::Boss) { Damage *= KeeperDamageScale; } // the difficulty's scale: health only, never the drain
 			Def.ApplyDamage(Damage);
 			bDefenderDied = Def.IsDead();
 			if (!bDefenderDied)
@@ -244,6 +245,7 @@ namespace HW
 		case EHitOutcome::Hit:
 		{
 			Damage = M.Damage;
+			if (Attacker == ESide::Boss) { Damage *= KeeperDamageScale; }
 			if (DefSide == ESide::Boss && Def.State == EFighterState::GuardBroken)
 			{
 				Damage *= K.ExposedDamageMult;

@@ -569,6 +569,7 @@ namespace HW
 		FEncounter Enc;
 		Enc.bRecordRows = OutRows != nullptr;
 		Enc.Begin(&Brain, Cfg.Seed, Cfg.bImmortal);
+		Enc.Duel.KeeperDamageScale = Cfg.KeeperDamageScale;
 		if (!Cfg.bImmortal && Cfg.BossHealthScale != 1.f)
 		{
 			FFighter& B = Enc.Duel.Get(ESide::Boss);

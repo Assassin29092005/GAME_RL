@@ -2,6 +2,7 @@
 #include "HWAudio.h"
 #include "HWTelemetry.h"
 #include "HWSettings.h"
+#include "Misc/App.h"
 #include "Misc/Parse.h"
 #include "Misc/CommandLine.h"
 #include "HWAnimTypes.h"
@@ -34,7 +35,7 @@ namespace
 		case EHWPlayerAction::Heavy:
 		case EHWPlayerAction::Switch: return 10; // chain presses land at the cancel frame
 		case EHWPlayerAction::Step:   return 6;
-		case EHWPlayerAction::Parry:  return 3;  // a buffered parry must not drift far from the press
+		case EHWPlayerAction::Parry:  return HWParryAssist::ParryBufferFrames; // must not drift far from the press (the ring knows)
 		default:                      return 0;
 		}
 	}
@@ -145,6 +146,7 @@ void UHWDuelSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 
 void UHWDuelSubsystem::Deinitialize()
 {
+	ResetTimeScale();
 	CloseTelemetry();
 	Super::Deinitialize();
 }
@@ -172,8 +174,10 @@ void UHWDuelSubsystem::RefreshKeeperIdentity()
 
 void UHWDuelSubsystem::RegisterFighters(AHWCharacterBase* InPlayer, AHWCharacterBase* InBoss)
 {
+	ResetTimeScale(); // the fighters being replaced leave at real time...
 	PlayerFighter = InPlayer;
 	BossFighter = InBoss;
+	ResetTimeScale(); // ...and the new ones start at it
 	if (InPlayer != nullptr) { InPlayer->GetCombat()->SetSide(HW::ESide::Player); }
 	if (InBoss != nullptr) { InBoss->GetCombat()->SetSide(HW::ESide::Boss); }
 	PlaceFighters();
@@ -239,8 +243,17 @@ void UHWDuelSubsystem::ResetEncounter(int32 InSeed)
 	{
 		if (const HW::FRLPolicy* Policy = S->GetPolicy())
 		{
-			// At what difficulty: the same network plays all three keepers at every skill (observation layout 3).
+			// At what difficulty: the same network plays all three keepers at every skill (observation layout 3). Adaptive AI:
+			// the difficulty's skill range walked by the session's insight into you, fixed for the whole fight.
 			S->GetKeeperConfig(KeeperSkill, KeeperTemperature, bKeeperAdaptive, KeeperSwingGap);
+			if (IsParityRun())
+			{
+				// The parity harness measures the gap with the keeper it always measured, whatever the difficulty or insight.
+				KeeperSkill = 1.f;
+				KeeperTemperature = 0.f;
+				KeeperSwingGap = 0;
+				bKeeperAdaptive = false;
+			}
 			RLBrain.Configure(KeeperSkill, KeeperIdentity, KeeperSwingGap);
 			RLBrain.SetTemperature(KeeperTemperature);
 			RLBrain.Bind(Policy, &S->GetMemory(), &S->GetNotebookMutable());
@@ -248,7 +261,7 @@ void UHWDuelSubsystem::ResetEncounter(int32 InSeed)
 			UE_LOG(LogHellwalkerRL, Log, TEXT("The RL keeper plays the %s at skill %.2f%s%s%s."), UTF8_TO_TCHAR(HW::RL::KeeperName(KeeperIdentity)),
 				KeeperSkill, KeeperTemperature > 0.f ? *FString::Printf(TEXT(", sampling at %.1f"), KeeperTemperature) : TEXT(""),
 				KeeperSwingGap > 0 ? *FString::Printf(TEXT(", at least %.1f s from one attack to its next opener"), KeeperSwingGap / static_cast<float>(HW::FramesPerSecond)) : TEXT(""),
-				bKeeperAdaptive ? TEXT(" (adaptive)") : TEXT(""));
+				bKeeperAdaptive ? *FString::Printf(TEXT(" (its insight into you: %.0f%%)"), S->GetInsight() * 100.f) : TEXT(""));
 		}
 		else
 		{
@@ -263,6 +276,10 @@ void UHWDuelSubsystem::ResetEncounter(int32 InSeed)
 	{
 		FightDifficulty = UHWSettingsSubsystem::DifficultyName(Set->GetDifficulty());
 	}
+	// The fight's assist and the keeper's damage (both modes), and how well the keeper knew you as it began (Adaptive AI).
+	ConfigureFightAssist();
+	FightInsight = Brain == &RLBrain ? S->GetInsight() : 0.f;
+	ResetTimeScale();
 	if (UHWTelemetrySubsystem* Telemetry = GetWorld()->GetGameInstance() != nullptr ? GetWorld()->GetGameInstance()->GetSubsystem<UHWTelemetrySubsystem>() : nullptr)
 	{
 		Telemetry->BeginFight(); // the notebook as this fight starts (after BeginEncounter flushed the last one's decision)
@@ -301,8 +318,9 @@ void UHWDuelSubsystem::ResetEncounter(int32 InSeed)
 	State = EHWEncounterState::Running;
 	if (UHWAudioSubsystem* Audio = GetWorld()->GetSubsystem<UHWAudioSubsystem>()) { Audio->OnDuelStart(KeeperIdentity); }
 	OpenTelemetry();
-	UE_LOG(LogHellwalkerRL, Log, TEXT("Encounter %d begins: %s (%s), seed %d; the keepers have met you in %d fight(s) and remember %d exchange(s)."),
-		S->EncountersStarted, *S->TierLabel(S->Tier), UTF8_TO_TCHAR(Brain->Name()), Seed, S->GetMemory().FightsBegun, S->GetMemory().NumTokens);
+	UE_LOG(LogHellwalkerRL, Log, TEXT("Encounter %d begins: %s (%s), seed %d; the keepers have met you in %d fight(s) and remember %d exchange(s). Parry assist %s (slow %.2f), keeper damage x%.2f."),
+		S->EncountersStarted, *S->TierLabel(S->Tier), UTF8_TO_TCHAR(Brain->Name()), Seed, S->GetMemory().FightsBegun, S->GetMemory().NumTokens,
+		*FightAssistName, FightAssist.SlowScale, FightKeeperDamageScale);
 }
 
 void UHWDuelSubsystem::PlaceFighters()
@@ -353,9 +371,10 @@ void UHWDuelSubsystem::EndEncounter(bool bPlayerWon)
 {
 	if (State != EHWEncounterState::Running) { return; } // once per fight (a double KO raises two Death events)
 	State = bPlayerWon ? EHWEncounterState::PlayerWon : EHWEncounterState::PlayerLost;
+	ResetTimeScale();
 	if (Encounter.IsValid() && Encounter->Brain() == &RLBrain)
 	{
-		// The notebook gets the fight's last answer; Adaptive moves the skill for the next fight.
+		// The notebook gets the fight's last answer; the session's insight follows how well it called you this fight.
 		RLBrain.FlushNotebook();
 		if (UHWSessionSubsystem* S = GetSession())
 		{
@@ -461,6 +480,7 @@ void UHWDuelSubsystem::ClearFighters()
 	{
 		if (AHWCharacterBase* C = GetFighterActor(static_cast<HW::ESide>(I))) { C->GetCombat()->StopDisplacement(); }
 	}
+	ResetTimeScale(); // while the pointers still reach them
 	CloseTelemetry();
 	PlayerFighter.Reset();
 	BossFighter.Reset();
@@ -501,6 +521,10 @@ void UHWDuelSubsystem::SetAutoplay(bool bEnable, HW::EBotKind Kind, float Skill)
 	AutoplaySkill = Skill;
 	AutoplayWalk = FVector2D::ZeroVector;
 	if (Bot.IsValid()) { Bot->Reset(HW::MakeBotProfile(Kind, Skill), Seed * 7919 + 17); }
+	// The bot plays the duel as it was measured, from this frame on: no assist, the keeper's full damage. (Turning it off
+	// mid-fight keeps that until the next fight, which configures itself.)
+	if (bEnable) { ConfigureFightAssist(); }
+	ResetTimeScale();
 	UE_LOG(LogHellwalkerRL, Log, TEXT("Autoplay %s (%s, skill %.2f)."), bEnable ? TEXT("on") : TEXT("off"), *ToFString(HW::BotKindName(Kind)), Skill);
 }
 
@@ -578,6 +602,7 @@ void UHWDuelSubsystem::Tick(float DeltaTime)
 
 	if (State != EHWEncounterState::Running)
 	{
+		ResetTimeScale();
 		for (FFlash& Fl : Flashes) { Fl.FramesLeft = FMath::Max(0, Fl.FramesLeft - 1); }
 		Flashes.RemoveAll([](const FFlash& Fl) { return Fl.FramesLeft <= 0; });
 		// A read that landed with the killing blow still fades over its ~0.4 s on the end screen (it froze before).
@@ -585,8 +610,9 @@ void UHWDuelSubsystem::Tick(float DeltaTime)
 		return;
 	}
 
-	// PLAN §5.2: one long frame crosses several boundaries, in order.
-	FrameCursor += static_cast<double>(DeltaTime) * HW::FramesPerSecond;
+	// PLAN §5.2: one long frame crosses several boundaries, in order. The duel runs at its time scale: the fighters ticked
+	// at it this frame (actors tick before this subsystem), so the frames and what the actors depict stay in step.
+	FrameCursor += static_cast<double>(DeltaTime) * HW::FramesPerSecond * static_cast<double>(TimeScale);
 	int32 Guard = 0;
 	while (FrameCursor >= 1.0 && Guard++ < 8)
 	{
@@ -601,6 +627,9 @@ void UHWDuelSubsystem::Tick(float DeltaTime)
 		if (State != EHWEncounterState::Running) { break; }
 	}
 	if (FrameCursor >= 1.0) { FrameCursor = 0.99; } // never spiral after a hitch
+
+	// The parry assist for the state a press made now will meet, and the time scale the fighters tick at next frame.
+	UpdateParryAssist(DeltaTime);
 
 	if (bDebugDraw)
 	{
@@ -710,13 +739,16 @@ void UHWDuelSubsystem::HandleEvents()
 	{
 		AHWCharacterBase* Actor = GetFighterActor(Ev.Side);
 		AHWCharacterBase* Other = GetFighterActor(HW::Opponent(Ev.Side));
+		// How hard a blow FEELS (rumble, flash, hit-stop, camera kick): a keeper's heavy still lands like a heavy when the
+		// difficulty scales its damage down (KeeperDamageScale), so its feel comes from the move itself (equal at scale 1).
+		const float FeelDamage = Ev.Side == HW::ESide::Boss && Ev.Outcome == HW::EHitOutcome::Hit ? HW::Move(Ev.Move).Damage : Ev.Damage;
 		if (Audio != nullptr)
 		{
 			// Swings sound where they start, outcomes where they land.
 			const AHWCharacterBase* At = Ev.Type == HW::EDuelEvent::Outcome ? Other : Actor;
 			Audio->OnDuelEvent(Ev, At != nullptr ? At->GetActorLocation() : FVector::ZeroVector, KeeperIdentity);
 		}
-		if (Ev.Type == HW::EDuelEvent::Outcome && Ev.Side == HW::ESide::Boss && Ev.Outcome == HW::EHitOutcome::Hit) { Rumble(0.55f + FMath::Min(Ev.Damage / 100.f, 0.45f), 0.18f); }
+		if (Ev.Type == HW::EDuelEvent::Outcome && Ev.Side == HW::ESide::Boss && Ev.Outcome == HW::EHitOutcome::Hit) { Rumble(0.55f + FMath::Min(FeelDamage / 100.f, 0.45f), 0.18f); }
 		if (Ev.Type == HW::EDuelEvent::Outcome && Ev.Side == HW::ESide::Boss && Ev.Outcome == HW::EHitOutcome::Parried) { Rumble(0.8f, 0.12f); }
 		if (Ev.Type == HW::EDuelEvent::Commit && Ev.Side == HW::ESide::Boss)
 		{
@@ -748,11 +780,11 @@ void UHWDuelSubsystem::HandleEvents()
 			switch (Ev.Outcome)
 			{
 			case HW::EHitOutcome::Hit:
-				AddFlash(Other->GetActorLocation() + FVector(0.f, 0.f, 40.f), FLinearColor(1.f, 0.35f, 0.08f), 0.6f + Ev.Damage / 40.f, 10);
+				AddFlash(Other->GetActorLocation() + FVector(0.f, 0.f, 40.f), FLinearColor(1.f, 0.35f, 0.08f), 0.6f + FeelDamage / 40.f, 10);
 				Other->GetCombat()->FlashFrames = 6;
 				Other->GetCombat()->FlashColor = FLinearColor(1.f, 0.9f, 0.85f);
-				HitstopFrames = Ev.Damage >= 40.f ? 4 : 2;
-				if (AHWPlayerCharacter* PC = Cast<AHWPlayerCharacter>(Other)) { PC->AddCameraKick(0.6f + Ev.Damage / 60.f); }
+				HitstopFrames = FeelDamage >= 40.f ? 4 : 2;
+				if (AHWPlayerCharacter* PC = Cast<AHWPlayerCharacter>(Other)) { PC->AddCameraKick(0.6f + FeelDamage / 60.f); }
 				break;
 			case HW::EHitOutcome::Blocked:
 				AddFlash(Mid + FVector(0.f, 0.f, 60.f), FLinearColor(0.3f, 0.6f, 1.f), 0.6f, 8);
@@ -804,6 +836,101 @@ void UHWDuelSubsystem::HandleEvents()
 	}
 	bInHandleEvents = false;
 	FlushFightRecord();
+}
+
+// =================================================================================================
+// The parry assist and the keeper's damage (presentation + difficulty; the rules are untouched)
+// =================================================================================================
+
+void UHWDuelSubsystem::ConfigureFightAssist()
+{
+	UWorld* World = GetWorld();
+	UGameInstance* GI = World != nullptr ? World->GetGameInstance() : nullptr;
+	const UHWSettingsSubsystem* Set = GI != nullptr ? GI->GetSubsystem<UHWSettingsSubsystem>() : nullptr;
+	// Gated: the bot, the parity harness and benchmarks play the duel as it was measured — no assist, the keeper's full
+	// damage. Scripted launches (-unattended, -HWExec) play without the assist unless -HWParryAssist= asks for it.
+	const bool bGated = bAutoplay || IsParityRun() || FApp::IsBenchmarking();
+	FString Exec;
+	const bool bScripted = FApp::IsUnattended() || FParse::Value(FCommandLine::Get(), TEXT("-HWExec="), Exec);
+	FightAssist = FHWAssistParams{};
+	FightKeeperDamageScale = 1.f;
+	if (Set != nullptr && !bGated)
+	{
+		const EHWDifficulty Difficulty = Set->GetDifficulty();
+		FightKeeperDamageScale = FMath::Clamp(UHWSettingsSubsystem::PresetFor(Difficulty).KeeperDamageScale, 0.05f, 2.f);
+		if (!bScripted || Set->HasParryAssistOverride())
+		{
+			FightAssist = UHWSettingsSubsystem::AssistFor(Set->GetParryAssist(), Difficulty);
+		}
+	}
+	FightAssist.SlowScale = FightAssist.bRing ? FMath::Clamp(FightAssist.SlowScale, 0.05f, 1.f) : 1.f;
+	// The research record's names (web/CONTRACT.md fight v2): slowmoScale is 1 unless "ring+slowmo".
+	FightAssistName = !FightAssist.bRing ? TEXT("off") : (FightAssist.SlowScale < 1.f ? TEXT("ring+slowmo") : TEXT("ring"));
+	if (Encounter.IsValid()) { Encounter->Duel.KeeperDamageScale = FightKeeperDamageScale; }
+}
+
+void UHWDuelSubsystem::UpdateParryAssist(float RealDeltaSeconds)
+{
+	ParryCue = FHWParryCue{};
+	float Target = 1.f;
+	if (State == EHWEncounterState::Running && Encounter.IsValid())
+	{
+		const HW::FDuel& Duel = Encounter->Duel;
+		const HW::FFighter& B = Duel.Get(HW::ESide::Boss);
+		const HW::FFighter& P = Duel.Get(HW::ESide::Player);
+		// The player's offset in the keeper's committed frame (LatchCommits writes the facing in Unreal space), as the
+		// contact oracle shapes the hit.
+		float Along = FighterDistance();
+		float Lateral = 0.f;
+		if (const AHWCharacterBase* PA = PlayerFighter.Get())
+		{
+			if (const AHWCharacterBase* BA = BossFighter.Get())
+			{
+				FVector Face(B.CommitFacingX, B.CommitFacingY, 0.f);
+				if (!Face.Normalize()) { Face = BA->GetActorForwardVector(); }
+				const FVector Right = FVector::CrossProduct(FVector::UpVector, Face);
+				FVector Off = PA->GetActorLocation() - BA->GetActorLocation();
+				Off.Z = 0.f;
+				Along = static_cast<float>(FVector::DotProduct(Off, Face));
+				Lateral = static_cast<float>(FVector::DotProduct(Off, Right));
+			}
+		}
+		// Presses apply in order (ApplyDueInput): an attack, switch or step still waiting in the buffer when the player
+		// becomes free commits before a parry pressed now.
+		const int32 Free = Duel.Frame + P.FramesUntilActionable();
+		bool bOtherPending = false;
+		for (const FQueuedInput& In : InputQueue)
+		{
+			const bool bCommits = In.Action == EHWPlayerAction::Light || In.Action == EHWPlayerAction::Heavy || In.Action == EHWPlayerAction::Switch
+				|| In.Action == EHWPlayerAction::Step;
+			if (bCommits && Free - In.Frame <= BufferFramesFor(In.Action)) { bOtherPending = true; break; }
+		}
+		ParryCue = HWParryAssist::Evaluate(B, P, GetFrameAlpha(), Along, Lateral, HitstopFrames > 0, bOtherPending);
+		if (!bAutoplay) { Target = HWParryAssist::TargetTimeScale(ParryCue, FightAssist); }
+	}
+	// Real-time ramps (this tick's DeltaTime is undilated: only the fighters are slowed): in ~0.06 s, out ~0.15 s.
+	const float Span = FMath::Max(1.f - FightAssist.SlowScale, 0.05f);
+	const float Dt = FMath::Max(RealDeltaSeconds, 0.f);
+	if (Target < TimeScale) { TimeScale = FMath::Max(Target, TimeScale - Dt * Span / SlowRampInSeconds); }
+	else { TimeScale = FMath::Min(Target, TimeScale + Dt * Span / SlowRampOutSeconds); }
+	if (TimeScale >= 1.f - UE_KINDA_SMALL_NUMBER) { TimeScale = 1.f; }
+	ApplyTimeScale();
+}
+
+void UHWDuelSubsystem::ResetTimeScale()
+{
+	TimeScale = 1.f;
+	ParryCue = FHWParryCue{};
+	ApplyTimeScale();
+}
+
+void UHWDuelSubsystem::ApplyTimeScale()
+{
+	// Only the two duelists: SetGlobalTimeDilation would slow the world, the camera's other users and the menus too.
+	for (int32 I = 0; I < 2; ++I)
+	{
+		if (AHWCharacterBase* C = GetFighterActor(static_cast<HW::ESide>(I))) { C->CustomTimeDilation = TimeScale; }
+	}
 }
 
 // =================================================================================================

@@ -5,7 +5,7 @@
 	<meta name="viewport" content="width=device-width, initial-scale=1">
 	<title>Hellwalker: a boss that learns you</title>
 	<meta name="description" content="HELLWALKER: a duel against keepers driven by a reinforcement-learning brain that reads your habits and counters them. Download the game and see what it learned about you.">
-	<meta name="theme-color" content="#0c0a09">
+	<meta name="theme-color" content="#0b0c10">
 	<meta name="color-scheme" content="dark">
 	<meta property="og:title" content="HELLWALKER: a boss that learns you">
 	<meta property="og:description" content="A keeper that reads your habits and counters them. See what it wrote down about you.">
@@ -13,29 +13,28 @@
 	<link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
 	<link rel="preconnect" href="https://fonts.googleapis.com">
 	<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-	<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cinzel:wght@500;600;700;900&family=IM+Fell+English:ital@0;1&family=Inter:wght@400;500;600;700&display=swap">
+	<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght,SOFT,WONK@0,9..144,300..900,0..100,0..1;1,9..144,300..900,0..100,0..1&family=JetBrains+Mono:ital,wght@0,400;0,500;0,700;0,800;1,400&display=swap">
 	<link rel="stylesheet" href="styles.css">
 	<script type="module" src="js/app.js"></script>
 </head>
 <body>
 	<a class="skip" href="#main">Skip to content</a>
+	<div class="backdrop" aria-hidden="true"></div>
+	<div class="atmos" aria-hidden="true"></div>
 	<canvas id="embers" aria-hidden="true"></canvas>
+	<aside class="page-margin" aria-hidden="true"><span class="file-no">Hellwalker · the keeper's files</span></aside>
 	<div id="banner" class="banner" hidden></div>
 
 	<header class="top">
 		<div class="wrap top-row">
 			<a class="brand" href="#/" aria-label="Hellwalker home">
-				<svg class="brand-sigil" viewBox="0 0 64 64" aria-hidden="true">
-					<circle cx="32" cy="32" r="29" fill="none" stroke="currentColor" stroke-width="2" opacity=".55"/>
-					<circle cx="32" cy="32" r="21" fill="none" stroke="currentColor" stroke-width="1.5" stroke-dasharray="3 4"/>
-					<path d="M8 32 Q32 12 56 32 Q32 52 8 32 Z" fill="none" stroke="currentColor" stroke-width="2.4"/>
-					<circle cx="32" cy="32" r="7" fill="currentColor"/>
-				</svg>
-				<span class="brand-word">HELLWALKER</span>
+				<span class="brand-mark" aria-hidden="true"></span>
+				<span class="brand-name">HELLWALKER</span>
+				<span class="brand-sub">A boss that learns you</span>
 			</a>
 			<button class="nav-toggle" type="button" aria-expanded="false" aria-controls="nav">
 				<span class="sr-only">Menu</span>
-				<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" stroke-width="2" stroke-linecap="square"/></svg>
+				<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" stroke-width="1.6" stroke-linecap="square"/></svg>
 			</button>
 			<nav id="nav" class="nav" aria-label="Main">
 				<a href="#/" data-route="home">Home</a>
@@ -49,15 +48,21 @@
 
 	<main id="main" tabindex="-1">
 		<div class="wrap loading-page">
-			<p class="loading"><span class="loading-eye" aria-hidden="true"></span>The keeper opens its notebook…</p>
-			<noscript><p class="card">This site needs JavaScript to show the stats. The game itself is on the Download page of the itch.io listing.</p></noscript>
+			<p class="loading"><span class="boot-mark" aria-hidden="true"></span>The keeper opens its notebook…</p>
+			<noscript><p class="block">This site needs JavaScript to show the stats. The game itself is on the Download page of the itch.io listing.</p></noscript>
 		</div>
 	</main>
 
 	<footer class="foot">
-		<div class="wrap foot-row">
-			<p><span class="foot-brand">HELLWALKER</span> is a research game: the keepers are driven by a neural network trained from scratch with reinforcement learning.</p>
-			<p>Anonymous gameplay numbers are collected for a research paper. <a href="#/research">What is collected</a> · <a href="#/me">Reset my data</a></p>
+		<div class="wrap">
+			<div class="foot-row">
+				<p class="foot-lead"><span class="foot-brand">HELLWALKER</span> is a research game: the keepers are driven by a neural network trained from scratch with reinforcement learning.</p>
+				<p>Anonymous gameplay numbers are collected for a research paper. <a href="#/research">What is collected</a> · <a href="#/me">Reset my data</a></p>
+			</div>
+			<div class="foot-strip">
+				<span>Hellwalker — reinforcement-learning boss project</span>
+				<span>It watches. It learns. It forgets when you quit.</span>
+			</div>
 			<p class="foot-fine">Inspired by the Hellwalker mode of <i>Phantom Blade Zero</i>; not affiliated with S-GAME.</p>
 		</div>
 	</footer>

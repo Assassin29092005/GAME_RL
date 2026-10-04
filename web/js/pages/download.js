@@ -1,6 +1,6 @@
-// HELLWALKER site - #/download : the itch.io button, what the PC needs, the research note, first steps.
+// HELLWALKER site - #/download : the itch.io button, what the PC needs, first steps, the settings, the research note.
 
-import { h } from "../ui.js";
+import { h, raw } from "../ui.js";
 
 export async function view({ config }) {
 	const button = config.itchUrl
@@ -9,60 +9,85 @@ export async function view({ config }) {
 				Download on itch.io</a>`
 		: h`<span class="btn" aria-disabled="true">Coming soon to itch.io</span>`;
 	const missing = config.itchUrl ? "" : h`<p class="hint">The download link appears here once the itch.io page is live (<code>itchUrl</code> in <code>config.js</code>).</p>`;
+	const ring = raw('<span class="ring-ico" aria-hidden="true"></span>');
 
 	const html = h`
-	<div class="wrap">
-		<header class="page-head">
-			<p class="kicker">Free download</p>
-			<h1 class="carved">Enter the valley</h1>
-			<p>Three shrines, three keepers, one mind that learns you. The game is free; no account, no login.</p>
+	<div class="wrap page">
+		<header class="dossier-head">
+			<div>
+				<div class="dossier-meta">
+					<div>Issue<b>Free download</b></div>
+					<div>Platform<b>Windows 10 / 11</b></div>
+					<div>Account<b>None</b></div>
+				</div>
+				<h1 class="subject-name">Face it <em>yourself</em>.</h1>
+			</div>
+			<div class="threat-block"><span class="stamp">For the valley</span></div>
 		</header>
 
-		<div class="card dl-card reveal">
-			<div class="btn-row c">${button}</div>
-			${missing}
-			<p class="hint">Windows 10 / 11, 64-bit · a zip of the whole game folder · run <b>HellwalkerRL.exe</b></p>
-		</div>
+		<section class="dl-hero reveal" aria-label="Download">
+			<div class="dl-info">
+				<p class="kicker ember">§ Field issue</p>
+				<p>Three shrines, three keepers, one mind that learns you. Walk the scripted keepers until you know them, or let
+				the Adaptive AI keepers learn you: a trick wins the first duels - by the fourth or fifth, they have read it.</p>
+				<p>The game is free. No account, no login: open your stats page from the game and this site writes your file.</p>
+			</div>
+			<div class="dl-cta">
+				${button}
+				${missing}
+				<span class="dl-cta-note">Windows 64-bit · a zip of the game folder · run HellwalkerRL.exe</span>
+			</div>
+		</section>
 
-		<div class="grid grid-2 section">
-			<section class="card reveal" aria-labelledby="req-h">
-				<div class="card-title"><h2 id="req-h">What your PC needs</h2></div>
-				<ul class="reqs">
-					<li><span class="k">System</span><span class="v">Windows 10 or 11, 64-bit</span></li>
-					<li><span class="k">Graphics</span><span class="v">A DirectX 12 graphics card</span></li>
-					<li><span class="k">Disk</span><span class="v">About 8 GB free</span></li>
-					<li><span class="k">Input</span><span class="v">Keyboard and mouse, or a gamepad</span></li>
-					<li><span class="k">Internet</span><span class="v">Optional - only to send the anonymous research stats</span></li>
-				</ul>
+		<div class="cols">
+			<section class="block span-6 reveal" aria-labelledby="req-h">
+				<header class="block-head"><h2 class="block-title" id="req-h">What your PC needs</h2><span class="block-tag">§ 01 · Requirements</span></header>
+				<table class="req-table">
+					<tbody>
+						<tr><td>System</td><td>Windows 10 or 11, 64-bit</td></tr>
+						<tr><td>Graphics</td><td>A DirectX 12 graphics card</td></tr>
+						<tr><td>Disk</td><td>About 8 GB free</td></tr>
+						<tr><td>Input</td><td>Keyboard and mouse, or a gamepad</td></tr>
+						<tr><td>Internet</td><td>Optional - only to send the anonymous research stats</td></tr>
+					</tbody>
+				</table>
 			</section>
 
-			<section class="card reveal" aria-labelledby="steps-h">
-				<div class="card-title"><h2 id="steps-h">First steps</h2></div>
+			<section class="block span-6 reveal" aria-labelledby="steps-h">
+				<header class="block-head"><h2 class="block-title" id="steps-h">First steps</h2><span class="block-tag">§ 02 · Install and play</span></header>
 				<ol class="steps">
-					<li><b>Download</b> the zip from itch.io (or install it with the itch app).</li>
-					<li><b>Unzip</b> the whole folder anywhere and run <b>HellwalkerRL.exe</b>. Windows may ask once whether to run an unsigned game.</li>
-					<li><b>Choose a walk:</b> Pathbreaker (a scripted keeper you can learn) or Hellwalker (the one that learns you).</li>
-					<li>After a few duels, open <b>Pause → Open my stats page</b>. This browser becomes yours: your page, the survey, the reset.</li>
+					<li><span><b>Download</b> the zip from itch.io (or install it with the itch app).</span></li>
+					<li><span><b>Unzip</b> the whole folder anywhere and run <b>HellwalkerRL.exe</b>. Windows may ask once whether to run an unsigned game.</span></li>
+					<li><span><b>Choose a walk:</b> <b>Normal</b> (scripted keepers you can learn) or <b>Adaptive AI</b> (the keepers that learn you).</span></li>
+					<li><span>After a few duels, open <b>Pause → Open my stats page</b>. This browser becomes yours: your page, the survey, the reset.</span></li>
 				</ol>
 			</section>
-		</div>
 
-		<div class="grid grid-2 section">
-			<section class="card reveal" aria-labelledby="keys-h">
-				<div class="card-title"><h2 id="keys-h">In a duel</h2><span class="muted">F1 shows every binding</span></div>
+			<section class="block span-6 reveal" aria-labelledby="keys-h">
+				<header class="block-head"><h2 class="block-title" id="keys-h">In a duel</h2><span class="block-tag">F1 shows every binding</span></header>
 				<div class="keys">
 					<span><kbd>LMB</kbd></span><span>Light attack (chain)</span>
 					<span><kbd>E</kbd></span><span>Heavy attack</span>
 					<span><kbd>RMB</kbd></span><span>Block (hold)</span>
-					<span><kbd>Q</kbd></span><span>Parry - just before the hit</span>
-					<span><kbd>Space</kbd> + dir</span><span>Ghoststep (dodge)</span>
+					<span><kbd>Q</kbd></span><span>Parry - press while the ${ring}<b>red ring</b> around the keeper's weapon is lit</span>
+					<span><kbd>Space</kbd> + dir</span><span>Ghoststep (dodge) - the answer to a <b class="violet">violet</b> telegraph (killer thrust, grab): it cannot be blocked or parried</span>
 					<span><kbd>N</kbd></span><span>The keeper's notebook: what it wrote down about you</span>
 				</div>
 			</section>
 
-			<section class="card reveal" aria-labelledby="tel-h">
-				<div class="card-title"><h2 id="tel-h">Research stats</h2></div>
-				<p class="note">The game sends <b>anonymous gameplay stats</b> after every duel - wins, parries, hits, dodges and what
+			<section class="block span-6 reveal" aria-labelledby="set-h">
+				<header class="block-head"><h2 class="block-title" id="set-h">Settings worth knowing</h2><span class="block-tag">§ 03 · Pause → Settings</span></header>
+				<ul class="settings-list">
+					<li><span class="k">Difficulty</span><b>Easy · Normal · Hard · Hellwalker</b> - how hard the keepers hit, and in Adaptive AI how strong
+						they can grow once they know you. Normal is the default; every difficulty is gentler than in earlier versions.</li>
+					<li><span class="k">Parry assist</span><b>Ring + slow-mo</b> (default) · <b>Ring</b> · <b>Off</b> - the red ring lights exactly
+						while a parry press would land; with slow-mo the duel slows down while it is lit.</li>
+				</ul>
+			</section>
+
+			<section class="block span-12 reveal" aria-labelledby="tel-h">
+				<header class="block-head"><h2 class="block-title" id="tel-h">Research stats</h2><span class="block-tag">§ 04 · Anonymous</span></header>
+				<p class="note">The game sends <b>anonymous gameplay stats</b> after every duel - wins, parries, hits, dodges, your settings and what
 				the keeper predicted - for a research paper on how players fare against a learning boss and how they feel about it.
 				No name, no email, no account: a random id per install.</p>
 				<p class="muted small">You can <a href="#/me">reset everything</a> recorded about you from your stats page at any time.
@@ -70,5 +95,5 @@ export async function view({ config }) {
 			</section>
 		</div>
 	</div>`;
-	return { title: "Download", html };
+	return { title: "Download", file: "File HW-DL · field issue", html };
 }

@@ -40,13 +40,23 @@ const main = document.getElementById("main");
 function showBanner() {
 	const el = document.getElementById("banner");
 	if (backend.mode === "demo") {
-		el.innerHTML = h`<b>DEMO DATA</b><span>No Firebase project is configured yet - every walker and fight shown here is generated.</span>`.__raw;
+		el.innerHTML = h`<b>Demo file</b><span>Sample data - no Firebase project is configured yet, so every walker and duel here is generated.</span>`.__raw;
 		el.hidden = false;
 	} else if (backend.mode === "mock") {
-		el.innerHTML = h`<b>MOCK BACKEND</b><span>Reading and writing the local mock at ${mockUrl()} - not the real database.</span>`.__raw;
+		el.innerHTML = h`<b>Mock backend</b><span>Reading and writing the local mock at ${mockUrl()} - not the real database.</span>`.__raw;
 		el.className = "banner mock";
 		el.hidden = false;
 	}
+}
+
+// The pages that stand in front of the keeper's silhouette (the rest have the plain ink and ember atmosphere).
+const SILHOUETTE = new Set(["profile", "me", "download", "lost"]);
+
+function setScene(page, file) {
+	document.body.dataset.page = page;
+	document.body.classList.toggle("has-silhouette", SILHOUETTE.has(page));
+	const f = $(".file-no");
+	if (f) f.textContent = file || "Hellwalker · the keeper's files";
 }
 
 const ROUTES = [
@@ -77,13 +87,14 @@ function setNav(nav) {
 }
 
 function loadingMarkup(text) {
-	return h`<div class="wrap loading-page"><p class="loading"><span class="loading-eye" aria-hidden="true"></span>${text}</p></div>`.__raw;
+	return h`<div class="wrap loading-page"><p class="loading"><span class="boot-mark" aria-hidden="true"></span>${text}</p></div>`.__raw;
 }
 
 function errorMarkup(e, retry = true) {
 	const msg = e && e.message ? e.message : String(e);
-	return h`<div class="wrap"><div class="card empty" role="alert">${raw(EMBLEMS.unknown())}
-		<h2>The notebook would not open</h2><p>${msg}</p>
+	return h`<div class="wrap page"><div class="block empty" role="alert">${raw(EMBLEMS.unknown())}
+		<p class="kicker ember">§ Error · the file is sealed</p>
+		<h2 class="empty-title">The notebook would not <em>open</em></h2><p>${msg}</p>
 		${retry ? h`<button type="button" class="btn ghost" data-retry>Try again</button>` : ""}</div></div>`.__raw;
 }
 
@@ -108,10 +119,20 @@ async function render({ keepScroll = false } = {}) {
 	const scrollY = window.scrollY;
 	if (!route) {
 		document.title = "Lost in the valley · Hellwalker";
-		main.innerHTML = h`<div class="wrap"><div class="card empty">${raw(EMBLEMS.unknown())}<h1 class="carved">Lost in the valley</h1>
-			<p>No path leads to <code>${path}</code>.</p><a class="btn ghost" href="#/">Back to the bell</a></div></div>`.__raw;
+		setScene("lost", "File HW-404 · no such path");
+		main.innerHTML = h`<div class="wrap page"><div class="lost">
+			<p class="kicker ember">§ 404 · No record</p>
+			<h1 class="subject-name">Lost in the <em>valley</em></h1>
+			<p class="lost-text">No path leads to <code>${path}</code>. The keeper watched you wander off the map.</p>
+			<div class="btn-row"><a class="btn" href="#/">Back to the bell</a><a class="btn ghost" href="#/leaderboard">The leaderboard</a></div></div></div>`.__raw;
+		const h1 = $("h1", main);
+		if (h1) {
+			h1.setAttribute("tabindex", "-1");
+			h1.focus({ preventScroll: true });
+		}
 		return;
 	}
+	setScene(route.nav || "profile");
 	if (!keepScroll) main.innerHTML = loadingMarkup(route.page.loadingText || "The keeper opens its notebook…");
 	const ctx = {
 		backend, config, params, linkToken,
@@ -124,6 +145,7 @@ async function render({ keepScroll = false } = {}) {
 		const out = await route.page.view(ctx);
 		if (my !== seq) return;
 		document.title = out.title ? `${out.title} · Hellwalker` : "Hellwalker: a boss that learns you";
+		setScene(route.nav || "profile", out.file);
 		main.innerHTML = out.html.__raw;
 		hydrate(main);
 		if (out.mount) out.mount(main, ctx);

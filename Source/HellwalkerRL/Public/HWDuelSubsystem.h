@@ -7,7 +7,14 @@
 //   4. FDuel steps — hit detection is a per-frame SWEEP of the attack's volume (§5.4), not an overlap event,
 //   5. events fan out to the model, the brain, telemetry (A2), presentation and delegates.
 // The rules themselves are HW::FEncounter — the exact code the B0 simulator validated. The boss brain is the tier's:
-// Pathbreaker = HW::FScriptBrain (the script verbatim), Hellwalker = HW::FRLBrain (the RL keeper, RL.md §8).
+// Pathbreaker = HW::FScriptBrain (the script verbatim; "Normal"), Hellwalker = HW::FRLBrain (the RL keeper, RL.md §8;
+// "Adaptive AI": its skill grows with its insight into you, UHWSessionSubsystem::GetKeeperConfig).
+//
+// Each fight also fixes, at its start: the keeper's damage scale (the difficulty's, both modes: HW::FDuel::KeeperDamageScale)
+// and the parry assist (HWParryAssist.h): a ring lit exactly while a parry pressed now would land, and slow motion while
+// it is lit — the frame cursor runs at the duel's time scale and both fighters tick at it (CustomTimeDilation), so the
+// world, the menus and the HUD keep real time. Autoplay, parity runs and -benchmark play without either (and parity with
+// the fixed keeper it always measured); scripted launches without the assist unless -HWParryAssist= says otherwise.
 
 #pragma once
 
@@ -20,6 +27,7 @@
 #include "HWCore/HWSim.h"
 #include "HWContactOracle.h"
 #include "HWCore/HWRLTypes.h"
+#include "HWParryAssist.h"
 #include "HWDuelSubsystem.generated.h"
 
 class AHWCharacterBase;
@@ -67,6 +75,21 @@ public:
 	float GetKeeperTemperature() const { return KeeperTemperature; }
 	int32 GetKeeperSwingGap() const { return KeeperSwingGap; }
 	bool IsKeeperAdaptive() const { return bKeeperAdaptive; }
+	/** This fight's start-of-fight settings (HUD, telemetry v2): the parry assist ("off" | "ring" | "ring+slowmo"), the slow
+	 *  motion scale (1 unless "ring+slowmo"), the keeper's damage scale (the difficulty's; 1 when gated) and the keeper's
+	 *  insight into you when the fight began (Adaptive AI; 0 for the script). Gating mid-fight (hw.Autoplay) turns the
+	 *  assist off and the damage scale back to 1 here too. */
+	FString GetFightAssistName() const { return FightAssistName; }
+	float GetFightSlowmoScale() const { return FightAssist.SlowScale; }
+	float GetFightKeeperDamageScale() const { return FightKeeperDamageScale; }
+	float GetFightInsight() const { return FightInsight; }
+	const FHWAssistParams& GetFightAssist() const { return FightAssist; }
+	/** The parry cue for the state between steps (evaluated after each tick's frames; HWParryAssist.h). */
+	const FHWParryCue& GetParryCue() const { return ParryCue; }
+	/** The duel's time scale this frame (1 = real time; below 1 while the slow motion holds the parry window). */
+	float GetTimeScale() const { return TimeScale; }
+	/** The duel is holding still on a hit (no frame elapses). */
+	bool IsInHitstop() const { return HitstopFrames > 0; }
 	/** Debug / flow tests (hw.Kill): drop a fighter's health to zero; the duel ends on its next frame. */
 	void DebugKill(HW::ESide Side);
 
@@ -171,6 +194,14 @@ private:
 	/** The research record of the fight that just ended (after the frame's READ has been counted). */
 	void FlushFightRecord();
 	void RefreshKeeperIdentity();
+	/** The fight's parry assist and keeper damage scale from the settings, with the gating (autoplay, parity, -benchmark,
+	 *  scripted launches); applied to the duel. */
+	void ConfigureFightAssist();
+	/** The cue for the state now and the next time scale (ramped in real time), applied to both fighters. */
+	void UpdateParryAssist(float RealDeltaSeconds);
+	/** Back to real time: the scale, both fighters' CustomTimeDilation, the cue. */
+	void ResetTimeScale();
+	void ApplyTimeScale();
 
 	void OpenTelemetry();
 	void FlushTelemetryRows();
@@ -204,6 +235,17 @@ private:
 	float KeeperTemperature = 0.f;
 	int32 KeeperSwingGap = 0;
 	bool bKeeperAdaptive = false;
+
+	// The fight's assist and damage (ConfigureFightAssist) and the slow motion it drives (UpdateParryAssist).
+	FHWAssistParams FightAssist;
+	FString FightAssistName = TEXT("off");
+	float FightKeeperDamageScale = 1.f;
+	float FightInsight = 0.f;
+	FHWParryCue ParryCue;
+	/** The rate the duel runs at: the cursor advances by it and the fighters tick at it (the scale they ticked with this frame). */
+	float TimeScale = 1.f;
+	static constexpr float SlowRampInSeconds = 0.06f;   // real time, from 1 to the fight's slow scale
+	static constexpr float SlowRampOutSeconds = 0.15f;
 
 	EHWEncounterState State = EHWEncounterState::WaitingToStart;
 	double FrameCursor = 0.0;

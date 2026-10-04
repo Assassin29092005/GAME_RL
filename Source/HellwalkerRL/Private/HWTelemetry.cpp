@@ -6,6 +6,7 @@
 #include "HWSaveGame.h"
 #include "HWSessionSubsystem.h"
 #include "HWSettings.h"
+#include "HWCore/HWMoves.h"
 #include "Dom/JsonObject.h"
 #include "Engine/GameInstance.h"
 #include "Engine/World.h"
@@ -63,6 +64,13 @@ namespace HWTelemetry
 	{
 		const int32 C = AnswerColumn(static_cast<int32>(Sym));
 		return C >= 0 ? FString(AnswerKeys[C]) : FString(TEXT("none"));
+	}
+
+	FString AssistKey(const FString& Name)
+	{
+		const FString N = Name.Replace(TEXT(" "), TEXT("")).ToLower();
+		if (!N.StartsWith(TEXT("ring"))) { return TEXT("off"); }
+		return N.Contains(TEXT("slow")) ? TEXT("ring+slowmo") : TEXT("ring");
 	}
 
 	void NotebookDelta(const HW::FRLNotebook& Before, const HW::FRLNotebook& Now, FHWFightRecord& R)
@@ -183,7 +191,9 @@ namespace HWTelemetry
 		{
 			FObj F = MakeShared<FJsonObject>();
 			auto Frac = [](float V) { return FMath::Clamp(static_cast<double>(V), 0.0, 1.0); };
-			F->SetField(TEXT("v"), I(1));
+			// A v2 number inside the rules' range (a NaN or an infinity would be refused: it becomes the neutral value).
+			auto Within = [](float V, double Lo, double Hi, double IfBad) { return FMath::IsFinite(V) ? FMath::Clamp(static_cast<double>(V), Lo, Hi) : IfBad; };
+			F->SetField(TEXT("v"), I(FightSchemaVersion));
 			F->SetField(TEXT("player"), S(R.Player));
 			F->SetField(TEXT("clientTime"), T(R.ClientTime));
 			F->SetField(TEXT("session"), S(R.Session));
@@ -224,6 +234,15 @@ namespace HWTelemetry
 				Ans->SetField(ClassKeys[C], M(Row));
 			}
 			F->SetField(TEXT("answers"), M(Ans));
+			// v2: the fight's setup. Slow motion exists only with the ring, so any other assist reports a scale of 1.
+			const bool bKnownAssist = R.Assist.Equals(TEXT("ring"), ESearchCase::CaseSensitive)
+				|| R.Assist.Equals(TEXT("ring+slowmo"), ESearchCase::CaseSensitive);
+			const FString Assist = bKnownAssist ? R.Assist : FString(TEXT("off"));
+			F->SetField(TEXT("assist"), S(Assist));
+			F->SetField(TEXT("slowmoScale"), D(Assist == TEXT("ring+slowmo") ? Within(R.SlowmoScale, 0.05, 1.0, 1.0) : 1.0));
+			F->SetField(TEXT("keeperDamageScale"), D(Within(R.KeeperDamageScale, 0.05, 2.0, 1.0)));
+			F->SetField(TEXT("parryWindowFrames"), I(FMath::Clamp(R.ParryWindowFrames, 1, 60)));
+			F->SetField(TEXT("insight"), D(Within(R.Insight, 0.0, 1.0, 0.0)));
 			return F;
 		}
 	}
@@ -379,6 +398,17 @@ namespace
 		FString Exec;
 		return FApp::IsUnattended() || FParse::Value(FCommandLine::Get(), TEXT("-HWExec="), Exec);
 	}
+
+	/** A launch that changes the opponent or the rules (another keeper model, the duel's movement, no hit-stop). */
+	bool HasDevOverride(FString& OutWhich)
+	{
+		const TCHAR* Cmd = FCommandLine::Get();
+		FString V;
+		if (FParse::Value(Cmd, TEXT("-HWPolicy="), V)) { OutWhich = TEXT("another keeper model (-HWPolicy)"); return true; }
+		if (FParse::Value(Cmd, TEXT("-HWMoveAccel="), V) || FParse::Value(Cmd, TEXT("-HWMoveBraking="), V)) { OutWhich = TEXT("changed duel movement (-HWMoveAccel / -HWMoveBraking)"); return true; }
+		if (FParse::Param(Cmd, TEXT("HWNoHitstop"))) { OutWhich = TEXT("no hit-stop (-HWNoHitstop)"); return true; }
+		return false;
+	}
 }
 
 const TCHAR* UHWTelemetrySubsystem::SlotName() const
@@ -408,7 +438,15 @@ void UHWTelemetrySubsystem::Initialize(FSubsystemCollectionBase& Collection)
 	while (Endpoint.EndsWith(TEXT("/"))) { Endpoint.LeftChopInline(1); }
 	// Tool fights are research data only in tests against a mock, never against the real project.
 	bAllowAutoplay = !Endpoint.IsEmpty() && FParse::Param(Cmd, TEXT("HWTelemetryAllowAutoplay"));
-	bEnabled = bConfigOn && !ApiKey.IsEmpty() && !ProjectId.IsEmpty() && !FParse::Param(Cmd, TEXT("HWNoTelemetry"));
+#if UE_BUILD_SHIPPING
+	const bool bBuildMayUpload = true;
+#else
+	// A development build (the editor, Play.bat, scripted checks) is the developer's own play: never research data in the
+	// real project unless asked for (-HWTelemetryDev). A mock endpoint (the tests) is always allowed.
+	const bool bBuildMayUpload = !Endpoint.IsEmpty() || FParse::Param(Cmd, TEXT("HWTelemetryDev"));
+	bDevBuildOff = !bBuildMayUpload;
+#endif
+	bEnabled = bConfigOn && bBuildMayUpload && !ApiKey.IsEmpty() && !ProjectId.IsEmpty() && !FParse::Param(Cmd, TEXT("HWNoTelemetry"));
 	Session = HWTelemetry::NewId();
 
 	Save = Cast<UHWTelemetrySave>(UGameplayStatics::LoadGameFromSlot(SlotName(), 0));
@@ -493,6 +531,7 @@ bool UHWTelemetrySubsystem::BuildRecord(const UHWDuelSubsystem& Duel, bool bPlay
 		if (Duel.IsParityRun()) { OutSkip = TEXT("a parity run"); return false; }
 		if (Duel.IsNotResearch(&Why)) { OutSkip = Why + TEXT(" (not research data)"); return false; }
 		if (IsScriptedLaunch()) { OutSkip = TEXT("a scripted launch (-unattended / -HWExec)"); return false; }
+		if (HasDevOverride(Why)) { OutSkip = Why + TEXT(" (not research data)"); return false; }
 	}
 	const HW::FEncounterStats& St = Enc->Stats;
 	const HW::FFighter& P = Enc->Duel.Get(HW::ESide::Player);
@@ -511,8 +550,9 @@ bool UHWTelemetrySubsystem::BuildRecord(const UHWDuelSubsystem& Duel, bool bPlay
 	R.PlayMode = TEXT("arena");
 	if (OW != nullptr && OW->GetSave() != nullptr)
 	{
-		const EHWPlayMode PM = OW->GetSave()->Mode;
-		R.PlayMode = PM == EHWPlayMode::Pathbreaker ? TEXT("pathbreaker") : (PM == EHWPlayMode::SixtySixDays ? TEXT("66days") : TEXT("hellwalker"));
+		// "Normal" = pathbreaker, "Adaptive AI" = hellwalker. A save from before 1.4.0 in 66 Days plays as Adaptive AI, so it
+		// reports hellwalker ("66days" only ever comes from older builds).
+		R.PlayMode = OW->GetSave()->Mode == EHWPlayMode::Pathbreaker ? TEXT("pathbreaker") : TEXT("hellwalker");
 	}
 	R.Brain = bRL ? TEXT("rl") : TEXT("script");
 	R.Keeper = Duel.GetKeeperIdentity();
@@ -524,8 +564,14 @@ bool UHWTelemetrySubsystem::BuildRecord(const UHWDuelSubsystem& Duel, bool bPlay
 		R.Difficulty = Settings != nullptr ? UHWSettingsSubsystem::DifficultyName(Settings->GetDifficulty()) : FString(TEXT("Hellwalker"));
 	}
 	R.Skill = bRL ? Duel.GetKeeperSkill() : 1.f;
-	R.bAdaptive = bRL && Duel.IsKeeperAdaptive();
+	R.bAdaptive = bRL;               // v2: every RL fight's skill is set by the insight ramp
 	R.Result = bTimeout ? TEXT("timeout") : (bPlayerWon ? TEXT("win") : TEXT("loss"));
+	// v2: the fight's setup as it began (the duel keeps the start-of-fight values; the HUD shows the same ones).
+	R.Assist = HWTelemetry::AssistKey(Duel.GetFightAssistName());
+	R.SlowmoScale = Duel.GetFightSlowmoScale();
+	R.KeeperDamageScale = Duel.GetFightKeeperDamageScale();
+	R.ParryWindowFrames = HW::Move(HW::EMoveId::PParry).Active;
+	R.Insight = bRL ? Duel.GetFightInsight() : 0.f;
 	R.Seconds = static_cast<float>(St.Frames) / static_cast<float>(HW::FramesPerSecond);
 	R.PlayerHealth = P.HealthMax > 0.f ? P.Health / P.HealthMax : 0.f;
 	R.KeeperHealth = K.HealthMax > 0.f ? K.Health / K.HealthMax : 0.f;
@@ -683,7 +729,10 @@ void UHWTelemetrySubsystem::CheckFightDelivered(const FString& FightId, int32 Co
 		}
 		if (Head.Attempts >= 3)
 		{
-			UE_LOG(LogHellwalkerRL, Warning, TEXT("telemetry: fight %s refused by the server (HTTP %d) three times; dropped."), *FightId, Code);
+			// Usually the project's published rules are older than this build's fight schema (v2 since 1.4.0): see web/README.md,
+			// "Before distributing a new build".
+			UE_LOG(LogHellwalkerRL, Warning, TEXT("telemetry: fight %s refused by the server (HTTP %d) three times; dropped. Are the "
+				"Firestore rules published from web/firebase/firestore.rules (fight schema v%d)?"), *FightId, Code, HWTelemetry::FightSchemaVersion);
 			Save->Pending.RemoveAt(Index);
 			PersistSave();
 			Flush();
@@ -884,6 +933,7 @@ void UHWTelemetrySubsystem::CreatePlayer()
 
 FString UHWTelemetrySubsystem::StatsPageUnavailableReason() const
 {
+	if (bDevBuildOff) { return TEXT("Stats sharing is off in development builds (the packaged game shares; -HWTelemetryDev turns it on)."); }
 	if (!bEnabled) { return TEXT("Stats sharing is not set up in this build."); }
 	if (SiteUrl.IsEmpty()) { return TEXT("The website's address is not set in this build."); }
 	if (Save == nullptr || Save->RefreshToken.IsEmpty()) { return TEXT("Your page appears once the game has reached the internet."); }

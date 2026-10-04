@@ -473,3 +473,86 @@ not deleted; fights queued before a reset on the website are dropped; the stats 
 its token. Rules: every lifetime counter (and each keeper's record) may grow by at most one fight's worth per write, not
 only `totals.fights` (mirrored in the mock; two new attack checks, 82 in all). Docs: the API-key restriction must include
 the Token Service API; itch.io's default upload cap; the read quota; CSV export guarded against formula injection.
+
+## 14. Insight, the keeper's damage scale and the parry assist (2026-10-04)
+
+From play: the owner lost every fight, so the project's demonstration — a trick works at first, then the keeper reads it
+— never appeared. All three changes are game-side; the trained environment (rules, observation, training, B0 defaults)
+is untouched, and every default reproduces the shipped numbers bit for bit.
+
+**Modes and difficulty.** Two play modes: *Normal* (`EHWPlayMode::Pathbreaker`, the script at every shrine — the final
+shrine no longer switches to the RL keeper) and *Adaptive AI* (`Hellwalker`, the RL keeper at every shrine); 66 Days is
+gone (`SixtySixDays` stays in the enum; such saves load as Adaptive AI). Difficulty is Easy / Normal / Hard / Hellwalker
+(`Adaptive` stays in the enum and sanitises to Normal); default Normal. `UHWSettingsSubsystem::PresetFor`:
+
+| | SkillLo → SkillHi | keeper damage | assist slow-motion |
+|---|---|---|---|
+| Easy | 0 → 0.4 | 0.60 | 0.40 (+ the incoming glow) |
+| Normal | 0 → 0.7 | 0.75 | 0.60 |
+| Hard | 0.15 → 0.85 | 0.85 | 0.75 |
+| Hellwalker | 0.3 → 1.0 | 0.90 | 0.85 |
+
+**`FDuel::KeeperDamageScale`** (configuration, not reset): multiplies the health damage of the boss's hits and block
+chip, never sha-chi drain, never the player's damage. 1 in `FRLEnv`, hwrl.dll and ThesisSim's defaults (`x * 1.0f == x`),
+so training and parity are unchanged; the game sets it per fight for both modes (autoplay / parity / benchmark: 1). The
+observation sees only the player's health falling more slowly. Hit-stop, flash, rumble and camera kick read the move's
+unscaled damage, so a keeper heavy still feels heavy. Test: `A3.KeeperDamageScale`.
+
+**`HW::FRLInsight`** (`HWRLBrain.h`): Insight ∈ [0, 0.95], 0 at the start of a session; after each RL fight, with N the
+fight's read-head calls on the keeper's attacks (`FRLNotebook::SwingPredictions` / `SwingCorrect`, the delta since the last
+record, taken after `FlushNotebook`) and a their top-1 accuracy:
+
+    target = 0.95 * clamp((a - 0.40) / (0.70 - 0.40), 0, 1)
+    Insight += rate * N / (N + 8) * (target - Insight)        rate = 0.45 rising, 0.55 falling
+
+`KeeperConfig(Lo, Hi)`: skill = Lo + (Hi - Lo) * Insight; temperature = 2.5 * (1 - Insight / 0.7)+; swing gap (frames from
+an attack's commit to the next opener, the `MinSwingGap` mask) = 210 * (1 - Insight / 0.6)+. Fixed for the whole fight
+(set before it, like the old difficulty). Session state: `UHWSessionSubsystem` holds it next to the memory and the
+notebook; `ResetMemory` (hw.ResetModel, quit) drops it. It replaces the old Adaptive controller (an outcome-driven skill
+walk), whose rubber-banding hid the reading. The skill input stays inside its trained range [0, 1] but now changes
+between fights of one session (training fixed it per session; the old Adaptive difficulty already did this), and the
+3.5 s gap at insight 0 is an unobserved mask like Easy's — both measured, not assumed.
+
+**Calibration (`Thesis.bat --arc`, `RunArcSession` in ThesisSim).** 64 sessions × 6 lethal fights (180 s) per player
+against the shipped keeper, one `FRLBrain` bound to a session and a notebook across the fights exactly as the game binds
+them, `Configure(skill, identity, gap)` + `SetTemperature` before each fight, `AfterFight` from the swing-call delta
+after it. Players: the simulator's habit players executing one answer to every swing (parry / block / step left /
+attack, habit noise 0.05) at skill 0.60 and 0.85 (assisted humans react like high-skill bots: at 0.6x slow motion a
+273 ms reaction is ~10 simulator frames), switchers (one habit for fights 1–3, another from 4) and near-random players.
+`--arc-tune k=v,...` tries the tunables without a rebuild. Tuning history: the agent's first constants (temperature 1,
+the 84-frame Easy gap at insight 0) let no trick player win even fight 1; a softer start (temperature 2.5, gap 210)
+gives the arc; faster learning (target accuracy 0.65, rise 0.6) countered skill-0.6 players by fight 2. Shipped
+constants, Normal preset (player win % per fight): block 0.85 → 98 · 92 · 70 · 28 · 3 · 0; step-left 0.85 → 97 · 94 ·
+80 · 48 · 19 · 3; parry 0.60 → 92 · 69 · 45 · 27 · 17 · 22; near-random insight stays ≤ 0.22. Graded check (block /
+step at skill ≥ 0.8: fights 1–2 ≥ 70 %, fight 5 ≤ 30 %, keeper rising): PASS on Easy and Normal; Hard and Hellwalker
+counter faster (Hellwalker: block 0.85 → 47 · 3 · 0 …) and fail it, as a harder tier should. Not countered: a skill-0.85
+parry bot (98–100 % every fight on Normal) — the parry-and-punish weakness (§13) at the easier rules; switching to
+another predictable habit does not reset the arc (the new one is read within a fight).
+
+**The parry assist (`HWParryAssist`, presentation only).** `Evaluate(Boss, Player, alpha, distance, hitstop)` gives the
+cue between two duel steps: with N = the player's `FramesUntilActionable()` (a press waits in the 3-frame input buffer)
+and D = impact − boss T, a press made now parries iff `PParry.Startup ≤ D − N ≤ PParry.Startup + PParry.Active − 1`; lit
+(red) exactly then, grey when the window is open but N makes it impossible, nothing for unparryable moves, resolved
+swings, swings that cannot reach (distance > max(Range, SweepReach) + 75 cm) or a parry already live at the impact. The
+impact is the one the wind-up *shows* (`FakeImpactFrame` for feints and the delayed heavy) until that moment passes —
+judged at the step a buffered press commits on — then the real one. Timing the real impact instead would make every
+feint and delayed heavy free and leave the keeper only the grab and the killer thrust against a parry habit, so the arc
+could not counter the trick the ring invites. `Project.HellwalkerRL.Assist.*` checks every parryable boss move against
+a real `FDuel`: on every lit frame a press parries (bait frames excepted: lit, and the press fails), on every other frame
+it does not, including presses buffered during recovery.
+
+Slow motion: `UHWDuelSubsystem` advances its frame cursor by `DeltaTime * 60 * TimeScale` and sets `CustomTimeDilation =
+TimeScale` on both fighters (movement, root motion, animation and boss locomotion stay in step with the frames; menus,
+HUD, automation and game-mode timers stay real-time — never `SetGlobalTimeDilation`). Target = the difficulty's slow scale
+while the cue is lit and the player can act; ramps in ~0.06 s, out ~0.15 s of real time; reset to 1 on every exit path
+(end, reset, clear, register, deinitialise, not running, autoplay switched on). Rules, hit-stop and the keeper's
+perception stay in simulator frames: the simulator never sees the slow motion. A human's reaction measured in simulator
+frames shrinks with it (≈ 6.6 frames for a 273 ms reaction at 0.4x — faster than the best training bot), which is why
+the assist is logged with every fight. Gating: autoplay, parity runs and `-benchmark` play with no assist and damage 1;
+parity runs also force skill 1 / temperature 0 / gap 0 (what parity always measured); scripted launches get the assist
+only with `-HWParryAssist=`. The unblockable telegraph moved from red to violet so red means only "parry now".
+
+**Telemetry v2** (`web/CONTRACT.md`): fight documents carry `assist` ("off" | "ring" | "ring+slowmo"), `slowmoScale`,
+`keeperDamageScale`, `parryWindowFrames` and `insight` (at fight start; 0 for the script); `adaptive` now means the
+insight ramp set the skill. The rules accept v1 (exactly the old keys, forever — offline-queued bodies) or v2; the owner
+must publish the new rules before distributing a 1.4.0 build.

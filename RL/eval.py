@@ -393,10 +393,12 @@ def run_keepers(policy: "hwcore.Policy", seed: int, n_players: int = 16, session
 
 def run_ladder(policy: "hwcore.Policy", seed: int, n_players: int = 16, sessions: int = 2, fights: int = 3,
 		skills=(0.0, 0.4, 0.75, 1.0), temperatures=(1.0, 0.6, 0.0, 0.0), gaps=None) -> dict:
-	"""The difficulty ladder (the game's Easy / Normal / Hard / Hellwalker presets: skill + sampling temperature, and
-	Easy's breather, RL::EasySwingGap: frames from one attack's commit to the next opener) in MORTAL fights against held-out players and the
-	reference bots: the keeper's win rate and damage should fall with the skill — and Easy should sit below the
-	script on the same players."""
+	"""The fixed-skill difficulty ladder — the PRE-INSIGHT presets (until 2026-10-04: Easy / Normal / Hard / Hellwalker as
+	skill + sampling temperature, and Easy's breather, RL::EasySwingGap: frames from one attack's commit to the next
+	opener), at full keeper damage — in MORTAL fights against held-out players and the reference bots: the keeper's win
+	rate and damage should fall with the skill, and the old Easy should sit below the script on the same players. The
+	game's current difficulties walk a skill range with FRLInsight and scale the keeper's damage; their arc is measured by
+	Tools\Thesis.bat --arc (RL/DESIGN.md §14)."""
 	if gaps is None:
 		gaps = (hwcore.easy_swing_gap(),) + (0,) * (len(skills) - 1)
 	if not (len(skills) == len(temperatures) == len(gaps)):

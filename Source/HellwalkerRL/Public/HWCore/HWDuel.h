@@ -57,6 +57,10 @@ namespace HW
 	public:
 		FFighter Fighters[2];
 		int32_t  Frame = 0;
+		/** Configuration, not state (Reset keeps it): the keeper's attacks deal this fraction of their HEALTH damage (a hit
+		 *  and the chip through a guard; never sha-chi drain, never the player's damage). The game's difficulty sets it
+		 *  per fight; training, hwrl.dll and ThesisSim's defaults stay at 1, which is bit-identical to no scale at all. */
+		float    KeeperDamageScale = 1.f;
 
 		void Reset();
 

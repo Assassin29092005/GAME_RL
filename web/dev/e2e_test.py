@@ -8,7 +8,8 @@
 It plays both sides exactly as the contract writes them:
   the game  - anonymous signUp, create players/{uid} once, one documents:commit per fight (create the fight with
               currentDocument.exists=false + update the player with updateMask and REQUEST_TIME / increment transforms),
-              an idempotent retry that must answer 409 and change nothing;
+              an idempotent retry that must answer 409 and change nothing; fights are v2 (game 1.4.0+), and a v1 fight
+              (an older build's offline queue) is still accepted;
   the site  - the profile (players/{uid} + runQuery fights where player == uid order by at desc), the leaderboard
               (runQuery players order by totals.* desc) and the collection list (pageSize / pageToken), linking a browser
               with the refresh token, nickname, survey, and the reset (fights gone, totals zero, nickname and survey kept);
@@ -40,6 +41,10 @@ KEEPERS = [("warden", "The Ninefold Warden"), ("sage", "The Monkey Sage"), ("ret
 INT_TOTALS = ["playerSwings", "playerHits", "keeperSwings", "keeperHits", "keeperBlocked", "keeperParried",
 	"keeperWhiffed", "parryAttempts", "dodges", "readsLanded", "predictions", "predictionsCorrect", "confident",
 	"confidentCorrect"]
+V2_KEYS = ["assist", "slowmoScale", "keeperDamageScale", "parryWindowFrames", "insight"]
+# The difficulty presets (skillLo, skillHi, keeperDamageScale, assist slow-motion scale), as the game's PresetFor.
+PRESETS = {"Easy": (0.0, 0.40, 0.60, 0.40), "Normal": (0.0, 0.70, 0.75, 0.60), "Hard": (0.15, 0.85, 0.85, 0.75),
+	"Hellwalker": (0.30, 1.00, 0.90, 0.85)}
 ADJ = ["Ashen", "Hollow", "Crimson", "Silent", "Ember", "Grave", "Pale", "Iron", "Wandering", "Broken", "Gilded", "Restless"]
 NOUN = ["Wanderer", "Pilgrim", "Blade", "Lantern", "Moth", "Shade", "Bellringer", "Exile", "Thorn", "Raven", "Vigil", "Ember"]
 
@@ -171,7 +176,7 @@ class Client:
 class Game:
 	"""One install: anonymous identity, a player document, one commit per fight."""
 
-	def __init__(self, c, rng, nickname=None):
+	def __init__(self, c, rng, nickname=None, play_mode="hellwalker", varied=False):
 		self.c, self.rng = c, rng
 		st, r = c.sign_up()
 		assert st == 200, (st, r)
@@ -184,6 +189,27 @@ class Game:
 		self.hit_skill = rng.uniform(0.3, 0.8)
 		self.win_skill = rng.uniform(0.05, 0.7)
 		self.habits = {c_: rng.choice(ANSWERS[:6]) for c_ in CLASSES}
+		# "Normal" (pathbreaker: the script) or "Adaptive AI" (hellwalker: the RL keeper). The checks' players use fixed
+		# settings (Normal, ring + slow motion, insight 0.4); seeded players (varied) get their own, and a keeper insight
+		# that climbs fight after fight towards how predictable they are.
+		self.play_mode = play_mode
+		self.varied = varied
+		self.difficulty, self.assist, self.readable = "Normal", "ring+slowmo", None
+		if varied:
+			self.difficulty = rng.choice(list(PRESETS))
+			self.assist = rng.choice(["ring+slowmo", "ring+slowmo", "ring", "off"])
+			self.readable = rng.uniform(0.35, 0.95)
+
+	def insight(self):
+		"""The keeper's insight as this fight begins: 0 at a session's first fight, then rising (varied players)."""
+		if self.play_mode == "pathbreaker":
+			return 0.0
+		if not self.varied:
+			return 0.4
+		if self.fight_no <= 1:
+			return 0.0
+		x = self.readable * (1 - 0.55 ** (self.fight_no - 1)) + self.rng.uniform(-0.04, 0.04)
+		return round(min(1.0, max(0.0, x)), 3)
 
 	def create_player(self):
 		zeros = {k: I(0) for k in ["fights", "wins", "losses", "timeouts"] + INT_TOTALS}
@@ -200,11 +226,16 @@ class Game:
 			"updateTransforms": [{"fieldPath": "createdAt", "setToServerValue": "REQUEST_TIME"}],
 		}], self.token)
 
-	def make_fight(self, keeper=None, result=None):
+	def make_fight(self, keeper=None, result=None, schema=2):
+		"""One fight document as the game writes it: v2 (schema=2, game 1.4.0), or v1 (schema=1, a 1.3.0 build)."""
 		r = self.rng
 		self.fight_no += 1
+		rl = self.play_mode != "pathbreaker"
+		insight = self.insight()
 		keeper = r.randrange(3) if keeper is None else keeper
-		result = result or ("win" if r.random() < self.win_skill else r.choice(["loss", "loss", "loss", "timeout", "quit"]))
+		# the learning arc: the better the keeper knows a varied player, the less often they win
+		win_p = self.win_skill * (1 - 0.6 * insight) if self.varied else self.win_skill
+		result = result or ("win" if r.random() < win_p else r.choice(["loss", "loss", "loss", "timeout", "quit"]))
 		seconds = r.uniform(18, 95)
 		ps = r.randrange(10, 45)
 		ks = r.randrange(15, 60)
@@ -215,6 +246,8 @@ class Game:
 		kh = max(0, min(ks - kp - kb - kw, int(ks * r.uniform(0.2, 0.5))))
 		preds = r.randrange(10, 40)
 		pc = int(preds * r.uniform(0.25, 0.75))
+		if self.varied:
+			pc = int(preds * min(0.95, 0.2 + 0.7 * insight + r.uniform(-0.05, 0.05)))  # it predicts better as it learns
 		conf = r.randrange(0, preds + 1)
 		cc = min(conf, int(conf * r.uniform(0.4, 0.9)))
 		answers = {}
@@ -232,26 +265,39 @@ class Game:
 				"delayedHeavy": "heavy", "feint": "feint", "grab": "heavy", "killer": "killer"}[atk]
 			expected.append({"attack": atk, "answer": self.habits[cl], "p": round(r.uniform(0.3, 0.9), 3)})
 		won = result == "win"
+		lo, hi, damage_scale, slow_scale = PRESETS[self.difficulty]
 		f = {
-			"v": 1, "player": self.uid, "clientTime": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-			"session": self.session, "fightInSession": self.fight_no, "gameVersion": "1.2.0",
-			"mode": "openworld", "playMode": "hellwalker", "brain": "rl", "keeper": keeper, "keeperName": KEEPERS[keeper][1],
-			"difficulty": "Normal", "skill": 0.4, "adaptive": False, "result": result, "seconds": seconds,
+			"v": 2, "player": self.uid, "clientTime": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+			"session": self.session, "fightInSession": self.fight_no, "gameVersion": "1.4.0",
+			"mode": "openworld", "playMode": self.play_mode, "brain": "rl" if rl else "script", "keeper": keeper,
+			"keeperName": KEEPERS[keeper][1], "difficulty": self.difficulty,
+			"skill": round(lo + (hi - lo) * insight, 4) if rl else 1.0, "adaptive": rl, "result": result, "seconds": seconds,
 			"playerHealth": r.uniform(0.05, 0.8) if won else 0.0, "keeperHealth": 0.0 if won else r.uniform(0.1, 0.9),
-			"dmgDealt": r.uniform(300, 1100) if not won else 1100.0, "dmgTaken": r.uniform(80, 360),
+			"dmgDealt": r.uniform(300, 1100) if not won else 1100.0, "dmgTaken": r.uniform(80, 360) * damage_scale,
 			"playerSwings": ps, "playerHits": int(ps * self.hit_skill * r.uniform(0.6, 1.0)),
 			"keeperSwings": ks, "keeperHits": kh, "keeperBlocked": kb, "keeperParried": kp, "keeperWhiffed": kw,
 			"parryAttempts": pa, "dodges": r.randrange(0, 20), "guardBreaks": r.randrange(0, 3),
-			"keeperExposed": r.randrange(0, 3), "readsLanded": r.randrange(0, 5),
+			"keeperExposed": r.randrange(0, 3), "readsLanded": r.randrange(0, 5) if rl else 0,
 			"predictions": preds, "predictionsCorrect": pc, "confident": conf, "confidentCorrect": cc,
 			"expected": expected, "answers": answers,
+			"assist": self.assist, "slowmoScale": slow_scale if self.assist == "ring+slowmo" else 1.0,
+			"keeperDamageScale": damage_scale, "parryWindowFrames": 12, "insight": insight,
 		}
+		if not rl:  # the script keeps no notebook: no predictions, READs, expectations or answer counts
+			f.update({"predictions": 0, "predictionsCorrect": 0, "confident": 0, "confidentCorrect": 0, "expected": [],
+				"answers": {}})
+		if schema == 1:  # a 1.3.0 build: exactly the v1 keys; `adaptive` then meant the old Adaptive difficulty
+			for k in V2_KEYS:
+				f.pop(k)
+			f.update({"v": 1, "gameVersion": "1.3.0", "adaptive": False})
+		elif schema != 2:
+			f["v"] = schema
 		return "%032x" % r.getrandbits(128), f
 
 	def fight_fields(self, f):
 		ints = {"v", "fightInSession", "keeper", "playerSwings", "playerHits", "keeperSwings", "keeperHits",
 			"keeperBlocked", "keeperParried", "keeperWhiffed", "parryAttempts", "dodges", "guardBreaks", "keeperExposed",
-			"readsLanded", "predictions", "predictionsCorrect", "confident", "confidentCorrect"}
+			"readsLanded", "predictions", "predictionsCorrect", "confident", "confidentCorrect", "parryWindowFrames"}
 		out = {}
 		for k, v in f.items():
 			if k == "clientTime":
@@ -406,6 +452,15 @@ def run(c, seed_players, site_url):
 	ck.ok("answers accumulate per class and answer", pa["answers"] == want_ans, (pa["answers"], want_ans))
 	ck.ok("expected = the latest fight's 8 rows", pa["expected"] == fights[2][1]["expected"], pa["expected"])
 	ck.ok("lastSeen set by the server", "lastSeen" in pa, pa.keys())
+	st, doc = c.get("fights/" + fights[0][0])
+	fd = plain_doc(doc) if st == 200 else {}
+	raw = doc.get("fields", {}) if st == 200 else {}
+	ck.ok("a stored v2 fight reads back: v 2, assist ring+slowmo, slowmoScale 0.6, keeperDamageScale 0.75, window 12, insight 0.4",
+		st == 200 and fd.get("v") == 2 and fd.get("assist") == "ring+slowmo" and fd.get("slowmoScale") == 0.6
+		and fd.get("keeperDamageScale") == 0.75 and fd.get("parryWindowFrames") == 12 and fd.get("insight") == 0.4, (st, fd))
+	ck.ok("... parryWindowFrames is an integerValue; slowmoScale, keeperDamageScale and insight are doubleValues",
+		"integerValue" in raw.get("parryWindowFrames", {})
+		and all("doubleValue" in raw.get(k, {}) for k in ("slowmoScale", "keeperDamageScale", "insight")), raw)
 
 	print("\n[the site: profile, leaderboard, list]")
 	st, docs = c.query("fights", where=("player", S(a.uid)), order=("at", "DESCENDING"), limit=20)
@@ -495,6 +550,21 @@ def run(c, seed_players, site_url):
 	malformed("unknown answer key", lambda x: x.__setitem__("answers", M({"fast": M({"teleport": I(1)})})))
 	malformed("nine expected rows", lambda x: x.__setitem__("expected", A([M({"attack": S("x"), "answer": S("y"), "p": D(0.5)})] * 9)))
 	malformed("fight id not 32 hex", lambda x: None, fight_id="NOT-HEX")
+	# the v2 fields (contract v2): exact key sets per version, and the assist / scale / window / insight ranges
+	malformed("v 1 carrying the v2 fields", lambda x: x.__setitem__("v", I(1)))
+	malformed("v 2 with only the v1 keys", lambda x: [x.pop(k) for k in V2_KEYS])
+	malformed("v 2 missing assist", lambda x: x.pop("assist"))
+	malformed("unknown assist", lambda x: x.__setitem__("assist", S("autoparry")))
+	malformed("assist 'ring' with slowmoScale 0.6 (slow motion only with ring+slowmo)", lambda x: x.__setitem__("assist", S("ring")))
+	malformed("slowmoScale 0", lambda x: x.__setitem__("slowmoScale", D(0)))
+	malformed("slowmoScale 1.5", lambda x: x.__setitem__("slowmoScale", D(1.5)))
+	malformed("keeperDamageScale 0", lambda x: x.__setitem__("keeperDamageScale", D(0)))
+	malformed("keeperDamageScale 2.5", lambda x: x.__setitem__("keeperDamageScale", D(2.5)))
+	malformed("parryWindowFrames 12.0 (a double)", lambda x: x.__setitem__("parryWindowFrames", D(12.0)))
+	malformed("parryWindowFrames 0", lambda x: x.__setitem__("parryWindowFrames", I(0)))
+	malformed("insight -0.1", lambda x: x.__setitem__("insight", D(-0.1)))
+	malformed("insight 1.2", lambda x: x.__setitem__("insight", D(1.2)))
+	malformed("v 3", lambda x: x.__setitem__("v", I(3)))
 
 	fid, f = a.make_fight()
 	w = a.fight_writes(fid, f)
@@ -530,6 +600,37 @@ def run(c, seed_players, site_url):
 	ck.ok("after all attacks A still has 3 fights and its nickname", plain_doc(doc)["totals"]["fights"] == 3
 		and plain_doc(doc)["nickname"] == "Ember Vigil 1234", plain_doc(doc)["totals"])
 
+	print("\n[an older build (v1), the v2 edges, a scripted keeper]")
+	old = Game(c, rng, nickname="Pale Exile 1300")
+	ck.status("create players/C", old.create_player(), 200)
+	fid, f = old.make_fight(schema=1)
+	ck.status("a v1 fight (a 1.3.0 build's offline queue: exactly the v1 keys) is still accepted", old.upload(fid, f), 200)
+	st, doc = c.get("fights/" + fid)
+	fd = plain_doc(doc) if st == 200 else {}
+	ck.ok("... it reads back as v 1 without the v2 fields", st == 200 and fd.get("v") == 1 and not any(k in fd for k in V2_KEYS), fd)
+	edges = [
+		("off, slowmoScale 1, keeperDamageScale 2, window 60, insight 1",
+			{"assist": "off", "slowmoScale": 1.0, "keeperDamageScale": 2.0, "parryWindowFrames": 60, "insight": 1.0}),
+		("ring, slowmoScale 1, keeperDamageScale 0.05, window 1, insight 0",
+			{"assist": "ring", "slowmoScale": 1.0, "keeperDamageScale": 0.05, "parryWindowFrames": 1, "insight": 0.0}),
+		("ring+slowmo, slowmoScale 0.4 (Easy), keeperDamageScale 0.6",
+			{"assist": "ring+slowmo", "slowmoScale": 0.4, "keeperDamageScale": 0.6}),
+	]
+	for name, over in edges:
+		fid, f = old.make_fight()
+		f.update(over)
+		ck.status("a v2 fight at the edges is accepted: " + name, old.upload(fid, f), 200)
+	t = plain_doc(c.get("players/" + old.uid)[1])["totals"]
+	ck.ok("C's totals count its v1 and v2 fights alike (fights %d)" % (1 + len(edges)), t["fights"] == 1 + len(edges), t)
+	norm = Game(c, rng, nickname="Grave Vigil 0001", play_mode="pathbreaker")
+	ck.status("create players/D (plays Normal: the scripted keepers)", norm.create_player(), 200)
+	fid, f = norm.make_fight()
+	ck.status("a v2 fight against the script (pathbreaker, brain script, insight 0, no expectations) is accepted", norm.upload(fid, f), 200)
+	fd = plain_doc(c.get("fights/" + fid)[1])
+	ck.ok("... it reads back with playMode pathbreaker, adaptive false, insight 0 and expected []",
+		fd.get("playMode") == "pathbreaker" and fd.get("brain") == "script" and fd.get("adaptive") is False
+		and fd.get("insight") == 0 and fd.get("expected") == [], fd)
+
 	print("\n[the site: reset]")
 	before = plain_doc(c.get("players/" + a.uid)[1])
 	deleted = 0
@@ -561,17 +662,22 @@ def run(c, seed_players, site_url):
 	link = None
 	if seed_players:
 		print("\n[seed: %d sample players for the site in mock mode]" % seed_players)
-		games = []
+		games, refused = [], 0
 		for i in range(seed_players):
-			g = Game(c, rng)
+			# the first two play Adaptive AI (the linked "my stats" player, the mixed history); then Adaptive AI 2:1 Normal
+			mode = "hellwalker" if i < 2 else rng.choice(["hellwalker", "hellwalker", "pathbreaker"])
+			g = Game(c, rng, play_mode=mode, varied=True)
 			g.create_player()
 			n = rng.randrange(3, 14)
 			ok = 0
-			for _ in range(n):
-				st, _ = g.upload(*g.make_fight())
+			for k in range(n):
+				# the second player began on a 1.3.0 build: its first two fights are v1 (a mixed history, like real data)
+				st, _ = g.upload(*g.make_fight(schema=1 if i == 1 and k < 2 else 2))
 				ok += st == 200
+			refused += n - ok
 			games.append(g)
-			print("  %-26s %2d fights  uid %s" % (g.nickname, ok, g.uid))
+			print("  %-26s %2d fights  uid %s  %s, %s, assist %s" % (g.nickname, ok, g.uid, mode, g.difficulty, g.assist))
+		ck.ok("seeded players: every fight accepted (randomised v2 fields, and two v1 fights)", refused == 0, refused)
 		lucky = games[0]
 		lik = {"feltRead": 4, "fair": 4, "difficulty": 4, "fun": 5, "playAgain": 4}
 		c.commit(survey_writes(c, lucky.uid, lik, True, "Seeded by e2e_test.py"), lucky.token)

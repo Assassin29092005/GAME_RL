@@ -14,6 +14,31 @@ namespace HW
 		return C >= 0 && C < Classes ? C : -1;
 	}
 
+	void FRLInsight::AfterFight(int32_t Predictions, int32_t Correct)
+	{
+		++Fights;
+		if (Predictions <= 0) { return; } // nothing it could have been right or wrong about
+		const float N = static_cast<float>(Predictions);
+		float Acc = static_cast<float>(Correct) / N;
+		Acc = Acc < 0.f ? 0.f : (Acc > 1.f ? 1.f : Acc);
+		float Norm = (Acc - AccuracyFloor) / (AccuracyFull - AccuracyFloor);
+		Norm = Norm < 0.f ? 0.f : (Norm > 1.f ? 1.f : Norm);
+		const float Target = MaxInsight * Norm;
+		const float Rate = (Target >= Insight ? RiseRate : FallRate) * N / (N + HalfWeightPredictions);
+		Insight += Rate * (Target - Insight);
+		Insight = Insight < 0.f ? 0.f : (Insight > MaxInsight ? MaxInsight : Insight);
+	}
+
+	void FRLInsight::KeeperConfig(float SkillLo, float SkillHi, float& OutSkill, float& OutTemperature, int32_t& OutSwingGap) const
+	{
+		const float I = Insight < 0.f ? 0.f : (Insight > 1.f ? 1.f : Insight);
+		OutSkill = SkillLo + (SkillHi - SkillLo) * I;
+		const float Loose = 1.f - I / TemperatureGoneAt;
+		OutTemperature = Loose > 0.f ? MaxTemperature * Loose : 0.f;
+		const float Breathe = 1.f - I / SwingGapGoneAt;
+		OutSwingGap = Breathe > 0.f ? static_cast<int32_t>(static_cast<float>(MaxSwingGap) * Breathe + 0.5f) : 0;
+	}
+
 	void FRLBrain::FlushNotebook()
 	{
 		if (Notebook == nullptr || PendingClass < 0) { PendingClass = -1; return; }
@@ -31,6 +56,11 @@ namespace HW
 			{
 				++N.Confident;
 				N.ConfidentCorrect += bRight ? 1 : 0;
+			}
+			if (PendingClass <= SymIndex(ESym::BKiller) - SymIndex(ESym::BFast))
+			{
+				++N.SwingPredictions;
+				N.SwingCorrect += bRight ? 1 : 0;
 			}
 			const int32_t F = PendingFight < FRLNotebook::MaxFights ? PendingFight : FRLNotebook::MaxFights - 1;
 			++N.FightPredictions[F];

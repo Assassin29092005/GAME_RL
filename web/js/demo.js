@@ -1,7 +1,9 @@
 // HELLWALKER site - demo mode: no Firebase project configured, so every page renders from generated sample data.
 // Deterministic (a fixed seed and a fixed calendar), shaped like the contract's documents, and consistent: each
-// player's totals are the sums of its generated fights. Changes made on "my stats" (rename, survey, reset) live in
-// memory only and vanish on reload. The banner says so.
+// player's totals are the sums of its generated fights. Older fights are telemetry v1; newer ones v2 (game 1.4.0: the
+// parry assist, keeper damage and the Adaptive AI keeper's insight, which rises over a session as it learns the walker
+// and starts at 0 every launch). Changes made on "my stats" (rename, survey, reset) live in memory only and vanish on
+// reload. The banner says so.
 
 import { ANSWERS, CLASSES } from "./model.js";
 
@@ -27,6 +29,24 @@ const ATTACKS = [["fastSlash", "fast"], ["sweepLeft", "fast"], ["sweepRight", "f
 const ANCHOR = Date.UTC(2026, 8, 28, 21, 0, 0); // the demo's "now" for its own calendar: 28 Sep 2026
 const HOUR = 3600e3, DAY = 24 * HOUR;
 const KEEPER_HP = [1100, 1100, 1375], PLAYER_HP = 360;
+const DIFFS_V1 = ["Easy", "Normal", "Hard", "Hellwalker", "Adaptive"], DIFFS_V2 = ["Easy", "Normal", "Hard", "Hellwalker"];
+// The game's difficulty presets (UHWSettingsSubsystem::PresetFor): the Adaptive AI keeper's skill range, the scale on
+// its hits, the parry assist's slow-motion scale.
+const PRESETS = {
+	Easy: { lo: 0, hi: 0.4, dmg: 0.6, slow: 0.4 },
+	Normal: { lo: 0, hi: 0.7, dmg: 0.75, slow: 0.6 },
+	Hard: { lo: 0.15, hi: 0.85, dmg: 0.85, slow: 0.75 },
+	Hellwalker: { lo: 0.3, hi: 1, dmg: 0.9, slow: 0.85 },
+};
+const round3 = (x) => Math.round(x * 1000) / 1000;
+
+/** A stand-in for the game's insight (HW::FRLInsight), for the demo only: after every Adaptive AI fight it moves toward
+ *  a normalised read accuracy; a fight with few predictions moves it little. */
+function afterFight(x, preds, correct) {
+	if (preds <= 0) return x;
+	const target = Math.max(0, Math.min(1, (correct / preds - 0.3) / 0.45));
+	return x + 0.45 * Math.min(1, preds / 20) * (target - x);
+}
 
 function binom(r, n, p) {
 	let k = 0;
@@ -84,26 +104,47 @@ function makePlayer(r, opts = {}) {
 		const sum = habits[c].reduce((s, w) => s + w, 0);
 		habits[c] = habits[c].map((w) => w / sum);
 	}
-	const readability = 0.25 + 0.45 * Math.max(...CLASSES.map(([c]) => Math.max(...habits[c])));
+	const readability = opts.readability ?? 0.25 + 0.45 * Math.max(...CLASSES.map(([c]) => Math.max(...habits[c])));
 	const createdAt = new Date(ANCHOR - (8 + r() * 40) * DAY);
+	// Fights from v2From on come from game 1.4.0 (telemetry v2: parry assist, keeper damage, insight); a quarter of the
+	// walkers never updated.
+	const v2From = Math.floor(nFights * (opts.v2From ?? (r() < 0.25 ? 1 : 0.2 + 0.6 * r())));
+	const assistPref = opts.assist || ["ring+slowmo", "ring+slowmo", "ring+slowmo", "ring", "ring", "off"][Math.floor(r() * 6)];
+	const [lenLo, lenHi] = opts.sessionLen || [2, 6];
+	const sessionLength = () => lenLo + Math.floor(r() * (lenHi - lenLo + 1));
 
 	const fights = [];
 	let t = createdAt.getTime() + r() * 6 * HOUR;
-	let session = hex(r, 32), inSession = 0;
+	let session = hex(r, 32), inSession = 0, len = sessionLength();
+	// One walk per launch (chosen on the title screen); the insight starts at 0 every launch. In some sessions the
+	// walker changes trick at fight `switchAt`, and the keeper's predictions miss for two fights.
+	let script = r() < 0.15, legacy66 = r() < 0.15, insight = 0, switchAt = -1;
 	for (let i = 0; i < nFights; i++) {
-		if (inSession >= 2 + Math.floor(r() * 5)) { // a new launch, a few hours or days later
+		if (inSession >= len) { // a new launch, a few hours or days later
 			t += (3 + r() * 40) * HOUR;
 			session = hex(r, 32);
 			inSession = 0;
+			len = sessionLength();
+			script = r() < 0.15;
+			legacy66 = r() < 0.15;
+			insight = 0;
+			switchAt = r() < 0.3 ? 3 + Math.floor(r() * 3) : -1;
 		}
 		t += (2 + r() * 6) * 60e3;
 		inSession++;
-		const script = r() < 0.12;
+		const v2 = i >= v2From;
 		const keeper = pickWeighted(r, [0.45, 0.33, 0.22]);
-		const diff = r() < 0.8 ? prefDiff : ["Easy", "Normal", "Hard", "Hellwalker", "Adaptive"][Math.floor(r() * 5)];
+		const diffs = v2 ? DIFFS_V2 : DIFFS_V1;
+		let diff = r() < 0.8 ? prefDiff : diffs[Math.floor(r() * diffs.length)];
+		if (v2 && diff === "Adaptive") diff = "Normal"; // old saves load as Normal
+		const preset = PRESETS[diff] || PRESETS.Normal;
+		const known = v2 && !script ? insight : null; // how well the keeper knows the walker going into this fight
 		const diffPen = { Easy: -0.18, Normal: 0, Hard: 0.08, Hellwalker: 0.14, Adaptive: 0.02 }[diff];
 		const learn = 0.12 * (i / Math.max(1, nFights));
-		const pWin = Math.max(0.03, Math.min(0.85, 0.06 + 0.55 * skill - [0, 0.04, 0.12][keeper] - diffPen + learn + (script ? 0.12 : 0)));
+		// v2: a trick wins while the keeper does not know you yet, and every difficulty hits softer than before
+		const arc = known === null ? 0 : 0.16 * (1 - known) - 0.1 * known;
+		const soft = v2 ? (1 - preset.dmg) * 0.35 : 0;
+		const pWin = Math.max(0.03, Math.min(0.88, 0.06 + 0.55 * skill - [0, 0.04, 0.12][keeper] - diffPen + learn + (script ? 0.12 : 0) + arc + soft));
 		const roll = r();
 		const result = roll < pWin ? "win" : roll < pWin + 0.04 ? "timeout" : roll < pWin + 0.07 ? "quit" : "loss";
 		const won = result === "win";
@@ -120,9 +161,10 @@ function makePlayer(r, opts = {}) {
 		const playerHealth = won ? 0.05 + 0.7 * r() : 0;
 		const dmgDealt = KEEPER_HP[keeper] * (1 - keeperHealth);
 		const dmgTaken = PLAYER_HP * (1 - playerHealth) * (result === "quit" ? 0.4 : 1);
-		const warm = Math.min(1, inSession / 3);
+		const warm = Math.min(1, (inSession - 1) / 3);
+		const changed = switchAt > 0 && inSession >= switchAt && inSession < switchAt + 2;
 		const preds = script ? 0 : Math.round(ks * (0.45 + 0.25 * r()));
-		const pc = script ? 0 : binom(r, preds, Math.min(0.9, readability * (0.75 + 0.25 * warm)));
+		const pc = script ? 0 : binom(r, preds, Math.min(0.9, readability * (0.55 + 0.5 * warm) * (changed ? 0.55 : 1)));
 		const conf = script ? 0 : binom(r, preds, 0.25 + 0.4 * (readability - 0.25));
 		const cc = script ? 0 : Math.min(conf, binom(r, conf, Math.min(0.95, readability + 0.12)));
 		const answers = {};
@@ -144,10 +186,10 @@ function makePlayer(r, opts = {}) {
 			return { attack, answer: r() < 0.85 ? ANSWERS[best] : ANSWERS[Math.floor(r() * ANSWERS.length)], p: Math.round(sure * 1000) / 1000 };
 		});
 		const arena = r() < 0.1;
-		fights.push({
+		const fight = {
 			id: hex(r, 32), v: 1, player: uid, at: new Date(t), clientTime: new Date(t - 400), session, fightInSession: inSession,
-			gameVersion: i > nFights * 0.7 ? "1.2.0" : "1.1.0", mode: arena ? "arena" : "openworld",
-			playMode: arena ? "arena" : script ? "pathbreaker" : "hellwalker", brain: script ? "script" : "rl",
+			gameVersion: i > nFights * 0.35 ? "1.3.0" : "1.2.0", mode: arena ? "arena" : "openworld",
+			playMode: arena ? "arena" : script ? "pathbreaker" : legacy66 ? "66days" : "hellwalker", brain: script ? "script" : "rl",
 			keeper, keeperName: KEEPER_NAMES[keeper], difficulty: diff,
 			skill: { Easy: 0, Normal: 0.4, Hard: 0.75, Hellwalker: 1, Adaptive: 0.3 + 0.4 * r() }[diff], adaptive: diff === "Adaptive",
 			result, seconds, playerHealth, keeperHealth, dmgDealt, dmgTaken, playerSwings: ps, playerHits: ph,
@@ -155,7 +197,17 @@ function makePlayer(r, opts = {}) {
 			dodges: Math.round(seconds / 60 * (4 + 14 * (habits.fast[2] + habits.fast[3] + habits.heavy[2] + habits.heavy[3]) * r() + 3 * r())),
 			guardBreaks: binom(r, 3, 0.25), keeperExposed: binom(r, 3, 0.15 + 0.3 * skill), readsLanded: binom(r, cc, 0.35),
 			predictions: preds, predictionsCorrect: pc, confident: conf, confidentCorrect: cc, expected, answers,
-		});
+		};
+		if (v2) { // telemetry v2 (game 1.4.0): two walks, four difficulties, the parry assist, keeper damage, insight
+			Object.assign(fight, {
+				v: 2, gameVersion: "1.4.0", playMode: arena ? "arena" : script ? "pathbreaker" : "hellwalker",
+				skill: known === null ? 0 : round3(preset.lo + (preset.hi - preset.lo) * known), adaptive: known !== null,
+				assist: assistPref, slowmoScale: assistPref === "ring+slowmo" ? preset.slow : 1, keeperDamageScale: preset.dmg,
+				parryWindowFrames: 12, insight: known === null ? 0 : round3(known),
+			});
+			if (known !== null) insight = afterFight(insight, preds, pc);
+		}
+		fights.push(fight);
 	}
 
 	// Slide the whole history so the latest duel lands on a plausible "last seen" before the demo's fixed now.
@@ -207,7 +259,8 @@ export class DemoBackend {
 		this.players = new Map();
 		this.fights = new Map();
 		const you = makePlayer(r, { uid: "demo-you", nickname: "Ashen Wanderer 4821", skill: 0.62, fights: 38, difficulty: "Normal",
-			habits: { fast: "parry", heavy: "stepL", feint: "parry", killer: "stepB" }, habitStrength: 0.68, survey: false, lastSeenHoursAgo: 3 });
+			habits: { fast: "parry", heavy: "stepL", feint: "parry", killer: "stepB" }, habitStrength: 0.68, survey: false, lastSeenHoursAgo: 3,
+			v2From: 0.3, sessionLen: [4, 7], readability: 0.78, assist: "ring+slowmo" });
 		this.add(you);
 		for (let i = 0; i < 46; i++) this.add(makePlayer(r));
 		this.me = "demo-you";

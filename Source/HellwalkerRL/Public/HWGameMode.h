@@ -3,7 +3,7 @@
 //
 // Command-line switches (for headless demos and end-to-end checks):
 //   -HWAutoStart                 skip the start screen
-//   -HWTier=Pathbreaker|Hellwalker
+//   -HWTier=Pathbreaker|Hellwalker  the modes Normal (scripted) | Adaptive AI (the RL keeper); Normal / Adaptive work too
 //   -HWAutoplay=<masher|turtle|habitual|varied|dodger|rhythm>  -HWAutoplaySkill=0.7
 //   -HWBlind                     B4 blind labels (Variant A / B)
 //   -HWDebug                     debug overlay + hit volumes
@@ -11,7 +11,7 @@
 //   -HWShotEvery=<s> -HWShots=<n>  after the first, keep taking one every <s> seconds, <n> in all
 //   -HWExec="<cmd>[|<cmd>...]" -HWExecAt=<s>  run console commands once, N seconds in (default 1)
 //   -HWBoss=Sevarog|Wukong  -HWGreybox  -HWAnimSurvey   C2 casts (HWAnimCasts.cpp)
-//   -HWEncounters=N              run N encounters back to back (the Warden keeps learning), then quit
+//   -HWEncounters=N              run N encounters back to back (Adaptive AI keeps learning you), then quit
 
 #pragma once
 

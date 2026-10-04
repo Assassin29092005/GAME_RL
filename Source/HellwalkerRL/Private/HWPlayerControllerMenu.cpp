@@ -31,11 +31,9 @@ namespace
 		const FName QuitDesktop(TEXT("QuitDesktop"));
 		const FName Back(TEXT("Back"));
 		const FName Continue(TEXT("Continue"));
-		const FName NewPathbreaker(TEXT("NewPathbreaker"));
-		const FName NewHellwalker(TEXT("NewHellwalker"));
-		const FName New66(TEXT("New66"));
 		const FName SkipTutorial(TEXT("SkipTutorial"));
 		const FName Difficulty(TEXT("Difficulty"));
+		const FName ParryAssist(TEXT("ParryAssist"));
 		const FName Sensitivity(TEXT("Sensitivity"));
 		const FName InvertY(TEXT("InvertY"));
 		const FName ResetBindings(TEXT("ResetBindings"));
@@ -116,33 +114,17 @@ void AHWPlayerController::BuildMenuPage(EHWMenuPage Page, EHWSettingsTab Tab, in
 			{
 				int32 Cleared = 0;
 				for (int32 I = 0; I < 3; ++I) { Cleared += Existing->IsShrineCleared(I) ? 1 : 0; }
-				const FString Mode = Existing->Mode == EHWPlayMode::Pathbreaker ? TEXT("Pathbreaker")
-					: (Existing->Mode == EHWPlayMode::SixtySixDays ? TEXT("66 Days") : TEXT("Hellwalker"));
-				Hint = FString::Printf(TEXT("%s  -  %d seal%s broken,  %d death%s"), *Mode, Cleared, Cleared == 1 ? TEXT("") : TEXT("s"),
+				Hint = FString::Printf(TEXT("%s  -  %d seal%s broken,  %d death%s"), *PlayModeName(Existing->Mode), Cleared, Cleared == 1 ? TEXT("") : TEXT("s"),
 					Existing->Deaths, Existing->Deaths == 1 ? TEXT("") : TEXT("s"));
-				if (Existing->Mode == EHWPlayMode::SixtySixDays) { Hint += FString::Printf(TEXT(",  %d days left"), Existing->DaysLeft); }
 			}
 			FHWMenuItem C = FHWMenuItem::Action(Ids::Continue, TEXT("Continue"), Hint);
 			C.Shortcut = TEXT("Enter");
 			OutItems.Add(C);
 		}
 		const FString Erase = bSave ? TEXT("Begin a new walk?  The saved walk will be erased.") : FString();
-		struct FNew { FName Id; const TCHAR* Label; const TCHAR* Hint; EHWMenuTone Tone; const TCHAR* Key; };
-		const FNew News[] = {
-			{ Ids::NewPathbreaker, TEXT("Pathbreaker"), TEXT("The keepers follow their patterns.  Learn them.  (The final keeper still reads you.)"), EHWMenuTone::Dim, TEXT("1") },
-			{ Ids::NewHellwalker, TEXT("Hellwalker"), TEXT("They learn you.  Stay unpredictable."), EHWMenuTone::Crimson, TEXT("2") },
-			{ Ids::New66, TEXT("66 Days"), TEXT("Hellwalker, and you have 66 lives.  Then the save is gone."), EHWMenuTone::Gold, TEXT("3") },
-		};
-		for (const FNew& N : News)
-		{
-			FHWMenuItem I = FHWMenuItem::Action(N.Id, FString::Printf(TEXT("New walk:  %s"), N.Label), N.Hint);
-			I.Tone = N.Tone;
-			I.Shortcut = N.Key;
-			I.Confirm = Erase;
-			OutItems.Add(I);
-		}
-		OutItems.Add(FHWMenuItem::Action(Ids::Settings, TEXT("Settings"), TEXT("Difficulty, controls, graphics, audio, accessibility.")));
-		OutItems.Add(FHWMenuItem::Action(Ids::Tutorial, TEXT("How the keeper learns you"), TEXT("Six short pages: what it sees, what it remembers, what READ means.")));
+		HWTitle::AddNewWalkItems(OutItems, Erase); // [1] Normal, [2] Adaptive AI
+		OutItems.Add(FHWMenuItem::Action(Ids::Settings, TEXT("Settings"), TEXT("Difficulty, parry assist, controls, graphics, audio, accessibility.")));
+		OutItems.Add(FHWMenuItem::Action(Ids::Tutorial, TEXT("How the keeper learns you"), TEXT("Six short pages: the two modes, what it sees, what it remembers, what READ means.")));
 		OutItems.Add(StatsItem(GetGameInstance()));
 		FHWMenuItem Q = FHWMenuItem::Action(Ids::QuitDesktop, TEXT("Quit to desktop"), TEXT("The keepers forget you when you quit."));
 		Q.Confirm = TEXT("Quit to the desktop?  The keepers will forget you.");
@@ -154,8 +136,8 @@ void AHWPlayerController::BuildMenuPage(EHWMenuPage Page, EHWSettingsTab Tab, in
 	{
 		OutInfo.Title = TEXT("PAUSED");
 		OutItems.Add(FHWMenuItem::Action(Ids::Resume, TEXT("Resume"), TEXT("Back to it.  The world has been holding still.")));
-		OutItems.Add(FHWMenuItem::Action(Ids::Settings, TEXT("Settings"), TEXT("Difficulty, controls, graphics, audio, accessibility.")));
-		OutItems.Add(FHWMenuItem::Action(Ids::Tutorial, TEXT("How the keeper learns you"), TEXT("Six short pages: what it sees, what it remembers, what READ means.")));
+		OutItems.Add(FHWMenuItem::Action(Ids::Settings, TEXT("Settings"), TEXT("Difficulty, parry assist, controls, graphics, audio, accessibility.")));
+		OutItems.Add(FHWMenuItem::Action(Ids::Tutorial, TEXT("How the keeper learns you"), TEXT("Six short pages: the two modes, what it sees, what it remembers, what READ means.")));
 		OutItems.Add(FHWMenuItem::Action(Ids::Notebook, TEXT("The keeper's notebook"), TEXT("What the keepers have written down about you this session.")));
 		OutItems.Add(StatsItem(GetGameInstance()));
 		if (GM == nullptr)
@@ -237,9 +219,15 @@ void AHWPlayerController::BuildMenuPage(EHWMenuPage Page, EHWSettingsTab Tab, in
 	{
 		OutItems.Add(FHWMenuItem::Header(TEXT("THE KEEPER")));
 		TArray<FString> Names;
-		for (int32 D = 0; D <= static_cast<int32>(EHWDifficulty::Adaptive); ++D) { Names.Add(UHWSettingsSubsystem::DifficultyName(static_cast<EHWDifficulty>(D))); }
-		OutItems.Add(FHWMenuItem::Choice(Ids::Difficulty, TEXT("Difficulty"), Names, static_cast<int32>(S->GetDifficulty()),
+		for (int32 D = 0; D < UHWSettingsSubsystem::NumMenuDifficulties; ++D) { Names.Add(UHWSettingsSubsystem::DifficultyName(static_cast<EHWDifficulty>(D))); }
+		OutItems.Add(FHWMenuItem::Choice(Ids::Difficulty, TEXT("Difficulty"), Names,
+			FMath::Clamp(static_cast<int32>(S->GetDifficulty()), 0, UHWSettingsSubsystem::NumMenuDifficulties - 1),
 			UHWSettingsSubsystem::DifficultyBlurb(S->GetDifficulty()) + TEXT("  (From the next fight.)")));
+		TArray<FString> Assists;
+		for (EHWParryAssist A : { EHWParryAssist::RingSlow, EHWParryAssist::Ring, EHWParryAssist::Off }) { Assists.Add(UHWSettingsSubsystem::ParryAssistName(A)); }
+		FString AssistHint = UHWSettingsSubsystem::ParryAssistBlurb(S->GetParryAssist()) + TEXT("  (From the next fight.)");
+		if (S->HasParryAssistOverride()) { AssistHint += TEXT("  Set by -HWParryAssist for this session."); }
+		OutItems.Add(FHWMenuItem::Choice(Ids::ParryAssist, TEXT("Parry assist"), Assists, static_cast<int32>(S->GetParryAssist()), AssistHint));
 		OutItems.Add(FHWMenuItem::Header(TEXT("CAMERA")));
 		FHWMenuItem Sens = FHWMenuItem::Slider(Ids::Sensitivity, TEXT("Mouse sensitivity"), S->GetMouseSensitivity(), FHWSettingsData::MinSensitivity,
 			FHWSettingsData::MaxSensitivity, 0.05f, TEXT("How far the camera turns per inch of mouse (exploring, or with the lock-on off)."));
@@ -277,7 +265,7 @@ void AHWPlayerController::BuildMenuPage(EHWMenuPage Page, EHWSettingsTab Tab, in
 		Fixed(TEXT("Move"), TEXT("W A S D"), TEXT("left stick"), TEXT("Movement stays on W A S D and the left stick."));
 		Fixed(TEXT("Look"), TEXT("Mouse"), TEXT("right stick"), TEXT("The lock-on owns the camera in a duel."));
 		Fixed(TEXT("Menu / back"), TEXT("Esc"), TEXT("Start / B"), TEXT("Esc and Start always open the menu; Esc and B go back."));
-		Fixed(TEXT("Choose tier (arena)"), TEXT("1 / 2"), TEXT("D-pad left / right"), TEXT("On the arena's start screen."));
+		Fixed(TEXT("Choose mode (title, arena)"), TEXT("1 / 2"), TEXT("D-pad left / right"), TEXT("1 / 2 pick the mode: a new walk at the title (named there), a fight on the arena's start screen (named there)."));
 		return;
 	}
 
@@ -737,11 +725,11 @@ void AHWPlayerController::HandleMenuEvent(const FHWMenuEvent& Event)
 		if (GM != nullptr && GM->ContinueGame()) { CloseMenu(); }
 		else { ShowMenuMessage(TEXT("There is no saved walk to continue.")); }
 	}
-	else if (Id == Ids::NewPathbreaker || Id == Ids::NewHellwalker || Id == Ids::New66)
+	else if (Id == HWMenuIds::NewNormal || Id == HWMenuIds::NewAdaptive)
 	{
 		if (GM != nullptr)
 		{
-			GM->NewGame(Id == Ids::NewPathbreaker ? EHWPlayMode::Pathbreaker : (Id == Ids::New66 ? EHWPlayMode::SixtySixDays : EHWPlayMode::Hellwalker));
+			GM->NewGame(Id == HWMenuIds::NewNormal ? EHWPlayMode::Pathbreaker : EHWPlayMode::Hellwalker);
 			CloseMenu();
 		}
 	}
@@ -790,9 +778,15 @@ void AHWPlayerController::HandleSettingChanged(const FHWMenuEvent& Event)
 	const FName Id = Event.Id;
 	if (Id == Ids::Difficulty)
 	{
-		const EHWDifficulty D = static_cast<EHWDifficulty>(FMath::Clamp(Event.Index, 0, static_cast<int32>(EHWDifficulty::Adaptive)));
+		const EHWDifficulty D = static_cast<EHWDifficulty>(FMath::Clamp(Event.Index, 0, UHWSettingsSubsystem::NumMenuDifficulties - 1));
 		S->SetDifficulty(D);
 		ShowMenuMessage(FString::Printf(TEXT("Difficulty: %s  -  from the next fight."), *UHWSettingsSubsystem::DifficultyName(D)));
+	}
+	else if (Id == Ids::ParryAssist)
+	{
+		const EHWParryAssist A = static_cast<EHWParryAssist>(FMath::Clamp(Event.Index, 0, static_cast<int32>(EHWParryAssist::Off)));
+		S->SetParryAssist(A);
+		ShowMenuMessage(FString::Printf(TEXT("Parry assist: %s  -  from the next fight."), *UHWSettingsSubsystem::ParryAssistName(A)));
 	}
 	else if (Id == Ids::Sensitivity) { S->SetMouseSensitivity(Event.Value); }
 	else if (Id == Ids::InvertY) { S->SetInvertY(Event.bOn); }
@@ -960,7 +954,7 @@ void AHWPlayerController::TickMenu(float DeltaSeconds)
 		}
 	}
 
-	// The first Hellwalker duel of a fresh install stops for "How the keeper learns you" (seen once, then never again).
+	// The first Adaptive AI duel of a fresh install stops for "How the keeper learns you" (seen once, then never again).
 	if (bAutoTutorial && !Menu.IsOpen())
 	{
 		const UHWSettingsSubsystem* S = GetSettings();

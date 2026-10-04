@@ -73,6 +73,7 @@ struct FHWCastSpec
 	FLinearColor TrailColor = FLinearColor::White;
 	float TrailWidth = 60.f;
 	TArray<FName> TrailSockets;       // where the trails hang (hand-blade casts use the blades instead)
+	TArray<FName> TelegraphSockets;   // the weapon hand(s) the parry assist's ring is drawn round (AHWCharacterBase::GetTelegraphPoints)
 	// Optional: a different body drawn over the (hidden) driver mesh by the Game Animation Sample's runtime
 	// retargeting - the driver keeps the frame-locked clips and every measured mark; only the look changes.
 	FString LookMeshPath;
@@ -147,6 +148,7 @@ public:
 	FLinearColor TrailColor = FLinearColor::White;
 	float TrailWidth = 60.f;
 	TArray<FName> TrailSockets;
+	TArray<FName> TelegraphSockets;
 	int32 MissingClips = 0;
 	/** One line per clip: marks, measured contact, sweep side, root speed (Saved/Hellwalker/AnimReport_<cast>.txt). */
 	FString Report;
