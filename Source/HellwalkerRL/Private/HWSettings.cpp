@@ -6,6 +6,7 @@
 #include "GameFramework/GameUserSettings.h"
 #include "Kismet/GameplayStatics.h"
 #include "Kismet/KismetSystemLibrary.h"
+#include "Misc/App.h"
 #include "Misc/CommandLine.h"
 #include "Misc/Parse.h"
 
@@ -425,6 +426,7 @@ void UHWSettingsSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 		}
 	}
 	ApplyAll();
+	ChooseFirstLaunchGraphics();
 	UE_LOG(LogHellwalkerRL, Log, TEXT("Settings: difficulty %s, parry assist %s%s, HUD %.0f%%, READ hold %.1f s, master %.0f%%%s."), *DifficultyName(Data.Difficulty),
 		*ParryAssistName(Data.ParryAssist), bParryAssistOverride ? TEXT(" (-HWParryAssist)") : TEXT(""), Data.HudScale * 100.f, Data.ReadHoldSeconds,
 		Data.MasterVolume * 100.f, bPersist ? TEXT("") : TEXT(" (not saved: -HWNoSave / a command-line override)"));
@@ -595,7 +597,7 @@ void UHWSettingsSubsystem::ResetBindings()
 
 const TArray<float>& UHWSettingsSubsystem::FrameLimits()
 {
-	static const TArray<float> L = { 30.f, 60.f, 120.f, 0.f };
+	static const TArray<float> L = { 60.f, 120.f, 0.f }; // never below 60; 0 = unlimited (the default)
 	return L;
 }
 
@@ -612,6 +614,28 @@ FString UHWSettingsSubsystem::QualityName(int32 Level)
 	}
 }
 
+namespace
+{
+	/** The scalability groups' levels (the Graphics tab sets them all at once). */
+	TArray<int32> QualityGroups(const UGameUserSettings& GUS)
+	{
+		return { GUS.GetViewDistanceQuality(), GUS.GetShadowQuality(), GUS.GetGlobalIlluminationQuality(), GUS.GetReflectionQuality(),
+			GUS.GetAntiAliasingQuality(), GUS.GetTextureQuality(), GUS.GetVisualEffectQuality(), GUS.GetPostProcessingQuality(),
+			GUS.GetFoliageQuality(), GUS.GetShadingQuality(), GUS.GetLandscapeQuality() };
+	}
+
+	/**
+	 * The level every group is at, or -1 (custom). Not GetOverallScalabilityLevel: it also wants the resolution quality to
+	 * match the level, and the saved settings keep that at 0, so after a restart every level read "Custom".
+	 */
+	int32 UniformQuality(const UGameUserSettings& GUS)
+	{
+		const TArray<int32> Levels = QualityGroups(GUS);
+		for (const int32 L : Levels) { if (L != Levels[0]) { return -1; } }
+		return Levels[0];
+	}
+}
+
 void UHWSettingsSubsystem::LoadGraphics()
 {
 	Resolutions.Reset();
@@ -619,7 +643,7 @@ void UHWSettingsSubsystem::LoadGraphics()
 	UGameUserSettings* GUS = GEngine != nullptr ? GEngine->GetGameUserSettings() : nullptr;
 	if (GUS == nullptr) { return; }
 	FHWGraphicsChoice G;
-	G.Quality = FMath::Clamp(GUS->GetOverallScalabilityLevel(), -1, 4); // -1 = custom (hand-set scalability groups)
+	G.Quality = FMath::Clamp(UniformQuality(*GUS), -1, 4); // -1 = custom (hand-set scalability groups)
 	G.Resolution = GUS->GetScreenResolution();
 	G.WindowMode = static_cast<uint8>(GUS->GetFullscreenMode());
 	G.bVSync = GUS->IsVSyncEnabled();
@@ -633,6 +657,36 @@ void UHWSettingsSubsystem::LoadGraphics()
 	Resolutions.Sort([](const FIntPoint& A, const FIntPoint& B) { return A.X != B.X ? A.X < B.X : A.Y < B.Y; });
 	Graphics = G;
 	GraphicsApplied = G;
+}
+
+void UHWSettingsSubsystem::ChooseFirstLaunchGraphics()
+{
+	// The engine's default is Epic on every PC, and a laptop or a 4 GB card at Epic (Lumen, virtual shadow maps, Nanite)
+	// crawled. Measure the hardware once (GameUserSettings.ini keeps the result, so this runs on the first launch only).
+	// The frame rate stays uncapped. Never in tools and tests.
+	UGameUserSettings* GUS = GEngine != nullptr ? GEngine->GetGameUserSettings() : nullptr;
+	if (GUS != nullptr && GUS->GetFrameRateLimit() > 0.f && GUS->GetFrameRateLimit() < FrameLimits()[0])
+	{
+		// Never below 60 fps (the Graphics tab's lowest limit): an older version offered 30.
+		GUS->SetFrameRateLimit(FrameLimits()[0]);
+		GUS->ApplyNonResolutionSettings();
+		GUS->SaveSettings();
+	}
+	if (GUS == nullptr || GUS->GetLastCPUBenchmarkResult() >= 0.f) { return; }
+	if (GIsEditor || !FApp::CanEverRender() || FApp::IsUnattended() || FApp::IsBenchmarking()) { return; }
+	// Only from the engine's default (every group at Epic): a lower quality picked in the Graphics tab by an earlier version
+	// is kept.
+	if (UniformQuality(*GUS) != 3) { return; }
+	GUS->RunHardwareBenchmark();
+	// The Graphics tab offers one level for everything: snap the benchmark's per-group levels to their rounded mean.
+	int32 Sum = 0;
+	const TArray<int32> Bench = QualityGroups(*GUS);
+	for (const int32 G : Bench) { Sum += G; }
+	GUS->SetOverallScalabilityLevel(FMath::Clamp(FMath::RoundToInt32(static_cast<float>(Sum) / Bench.Num()), 0, 3));
+	GUS->ApplySettings(false);
+	GUS->SaveSettings();
+	UE_LOG(LogHellwalkerRL, Log, TEXT("Graphics: first launch on this PC, benchmark CPU %.0f GPU %.0f -> quality %s."),
+		GUS->GetLastCPUBenchmarkResult(), GUS->GetLastGPUBenchmarkResult(), *QualityName(UniformQuality(*GUS)));
 }
 
 bool UHWSettingsSubsystem::HasUnappliedGraphics() const

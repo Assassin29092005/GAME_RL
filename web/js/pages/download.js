@@ -18,7 +18,7 @@ export async function view({ config }) {
 	const getSteps = onGitHub
 		? h`<li><span><b>Download every file</b> of the latest release into one folder: all the parts (<code>….zip.001</code>, <code>.002</code>, …) and <b>Join-and-Extract.bat</b>.</span></li>
 			<li><span><b>Double-click Join-and-Extract.bat.</b> It joins the parts and unpacks the <b>HellwalkerRL</b> folder (about 16 GB free while it works). Using 7-Zip? Open the <code>.001</code> part and extract it instead.</span></li>
-			<li><span>Open the folder and run <b>HellwalkerRL.exe</b>. Windows may say "Windows protected your PC" (the game is unsigned): <b>More info → Run anyway</b>.</span></li>`
+			<li><span>Open the folder and run <b>HellwalkerRL.exe</b>. Windows may say "Windows protected your PC" (the game is unsigned): <b>More info → Run anyway</b>. A PC without the Microsoft Visual C++ runtime gets it installed first (one Windows prompt).</span></li>`
 		: h`<li><span><b>Download</b> the zip (or install it with the itch app).</span></li>
 			<li><span><b>Unzip</b> the whole folder anywhere and run <b>HellwalkerRL.exe</b>. Windows may ask once whether to run an unsigned game.</span></li>`;
 	const ring = raw('<span class="ring-ico" aria-hidden="true"></span>');
@@ -58,7 +58,7 @@ export async function view({ config }) {
 					<tbody>
 						<tr><td>System</td><td>Windows 10 or 11, 64-bit</td></tr>
 						<tr><td>Graphics</td><td>A DirectX 12 graphics card</td></tr>
-						<tr><td>Disk</td><td>About 8 GB free (16 GB while unpacking)</td></tr>
+						<tr><td>Disk</td><td>About 8 GB free (16 GB while unpacking, counting the downloaded parts)</td></tr>
 						<tr><td>Input</td><td>Keyboard and mouse, or a gamepad</td></tr>
 						<tr><td>Internet</td><td>Optional - only to send the anonymous research stats</td></tr>
 					</tbody>

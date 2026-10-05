@@ -1,4 +1,6 @@
 #include "HWBuild.h"
+#include "HWAnimTypes.h"
+#include "Engine/SkeletalMesh.h"
 
 #include "HWDressing.h"
 #if WITH_EDITOR
@@ -239,6 +241,52 @@ int32 HWBuild::SaveInstancedUsageForDressing()
 		}
 	}
 	UE_LOG(LogHellwalkerRL, Display, TEXT("HWMakeMaps: %d dressing materials checked, %d newly marked for instancing."), Seen.Num(), Marked);
+	return Failed;
+}
+
+int32 HWBuild::SaveSkeletalUsageForCasts()
+{
+	int32 Marked = 0;
+	int32 Failed = 0;
+	TSet<UMaterial*> Seen;
+	for (const TCHAR* Cast : { TEXT("Soul"), TEXT("Sevarog"), TEXT("Wukong"), TEXT("Golem") })
+	{
+		const FHWCastSpec* Spec = HWFindCastSpec(FName(Cast));
+		if (Spec == nullptr) { continue; }
+		for (const FString& Path : { Spec->MeshPath, Spec->LookMeshPath })
+		{
+			if (Path.IsEmpty() || !FPackageName::DoesPackageExist(FPackageName::ObjectPathToPackageName(Path))) { continue; }
+			const USkeletalMesh* Mesh = LoadObject<USkeletalMesh>(nullptr, *Path);
+			if (Mesh == nullptr) { continue; }
+			const bool bCloth = Mesh->HasActiveClothingAssets();
+			for (const FSkeletalMaterial& Slot : Mesh->GetMaterials())
+			{
+				UMaterial* Base = Slot.MaterialInterface != nullptr ? Slot.MaterialInterface->GetMaterial() : nullptr;
+				if (Base == nullptr || Seen.Contains(Base)) { continue; }
+				Seen.Add(Base);
+				bool bChanged = false;
+				for (const EMaterialUsage Usage : { MATUSAGE_SkeletalMesh, MATUSAGE_Clothing })
+				{
+					if ((Usage == MATUSAGE_Clothing && !bCloth) || Base->GetUsageByFlag(Usage)) { continue; }
+					Base->SetUsageByFlag(Usage, true);
+					bChanged = true;
+				}
+				if (!bChanged) { continue; }
+				Base->PostEditChange();
+				UPackage* Package = Base->GetOutermost();
+				const FString File = FPackageName::LongPackageNameToFilename(Package->GetName(), FPackageName::GetAssetPackageExtension());
+				FSavePackageArgs Args;
+				Args.TopLevelFlags = RF_Public | RF_Standalone;
+				Args.SaveFlags = SAVE_NoError;
+				const bool bSaved = UPackage::SavePackage(Package, nullptr, *File, Args);
+				UE_LOG(LogHellwalkerRL, Display, TEXT("HWMakeMaps: skeletal%s usage on %s (for %s): %s"), bCloth ? TEXT(" + clothing") : TEXT(""),
+					*Base->GetName(), *Mesh->GetName(), bSaved ? TEXT("saved") : TEXT("FAILED"));
+				Marked += bSaved ? 1 : 0;
+				Failed += bSaved ? 0 : 1;
+			}
+		}
+	}
+	UE_LOG(LogHellwalkerRL, Display, TEXT("HWMakeMaps: %d keeper materials checked, %d newly marked."), Seen.Num(), Marked);
 	return Failed;
 }
 #endif

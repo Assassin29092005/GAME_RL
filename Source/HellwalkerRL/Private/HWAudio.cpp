@@ -218,6 +218,9 @@ void UHWAudioSubsystem::OnDuelStart(int32 InIdentity)
 	Identity = InIdentity;
 	bDuel = true;
 	for (int32& C : Counts) { C = 0; }
+	// Every cue of this keeper now, at the start: loaded on first play, each one froze the game at a first hit / parry /
+	// voice line (a synchronous load on the game thread). Cached after the first fight.
+	for (int32 C = 0; C < static_cast<int32>(EHWCue::Count); ++C) { Load(static_cast<EHWCue>(C)); }
 	EnsureMusic();
 }
 

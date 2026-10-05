@@ -15,7 +15,6 @@
 #include "HWWorldGen.h"
 #include "HWSlashFX.h"
 #include "CollisionQueryParams.h"
-#include "DrawDebugHelpers.h"
 #include "Engine/GameInstance.h"
 #include "Engine/World.h"
 #include "GameFramework/CharacterMovementComponent.h"
@@ -27,6 +26,10 @@
 
 namespace
 {
+	// The engine runs on real time, so a slow PC steps several duel frames per rendered frame: real-time speed down to
+	// 20 fps. A hitch (or a PC below 20 fps) drops the rest instead of jumping a wind-up and its parry window past the player.
+	constexpr int32 MaxDuelFramesPerTick = 3;
+
 	int32 BufferFramesFor(EHWPlayerAction A)
 	{
 		switch (A)
@@ -305,6 +308,7 @@ void UHWDuelSubsystem::ResetEncounter(int32 InSeed)
 	if (Bot.IsValid()) { Bot->Reset(HW::MakeBotProfile(AutoplayKind, AutoplaySkill), Seed * 7919 + 17); }
 
 	PlaceFighters();
+	HWWarmImpactFX(GetWorld(), PlayerSpawn); // before the first exchange, not on the first heavy hit
 	bParityTimeout = false;
 	ParityDistanceSum = 0.0;
 	ParityDistanceSamples = 0;
@@ -603,10 +607,15 @@ void UHWDuelSubsystem::Tick(float DeltaTime)
 	if (State != EHWEncounterState::Running)
 	{
 		ResetTimeScale();
-		for (FFlash& Fl : Flashes) { Fl.FramesLeft = FMath::Max(0, Fl.FramesLeft - 1); }
+		// Frame counters still count 60 fps frames, not rendered ones (the engine runs on real time).
+		IdleFrameCursor = FMath::Min(IdleFrameCursor + static_cast<double>(DeltaTime) * HW::FramesPerSecond, 8.0);
+		for (; IdleFrameCursor >= 1.0; IdleFrameCursor -= 1.0)
+		{
+			for (FFlash& Fl : Flashes) { Fl.FramesLeft = FMath::Max(0, Fl.FramesLeft - 1); }
+			// A read that landed with the killing blow still fades over its ~0.4 s on the end screen (it froze before).
+			if (ReadMeterFramesLeft > 0) { --ReadMeterFramesLeft; }
+		}
 		Flashes.RemoveAll([](const FFlash& Fl) { return Fl.FramesLeft <= 0; });
-		// A read that landed with the killing blow still fades over its ~0.4 s on the end screen (it froze before).
-		if (ReadMeterFramesLeft > 0) { --ReadMeterFramesLeft; }
 		return;
 	}
 
@@ -614,7 +623,7 @@ void UHWDuelSubsystem::Tick(float DeltaTime)
 	// at it this frame (actors tick before this subsystem), so the frames and what the actors depict stay in step.
 	FrameCursor += static_cast<double>(DeltaTime) * HW::FramesPerSecond * static_cast<double>(TimeScale);
 	int32 Guard = 0;
-	while (FrameCursor >= 1.0 && Guard++ < 8)
+	while (FrameCursor >= 1.0 && Guard++ < MaxDuelFramesPerTick)
 	{
 		FrameCursor -= 1.0;
 		if (HitstopFrames > 0 && bNoHitstop) { HitstopFrames = 0; }
@@ -630,18 +639,7 @@ void UHWDuelSubsystem::Tick(float DeltaTime)
 
 	// The parry assist for the state a press made now will meet, and the time scale the fighters tick at next frame.
 	UpdateParryAssist(DeltaTime);
-
-	if (bDebugDraw)
-	{
-		for (int32 I = 0; I < 2; ++I)
-		{
-			const FHitVolume& V = LastVolume[I];
-			if (V.Frame >= 0 && GetDuelFrame() - V.Frame < 2)
-			{
-				DrawDebugBox(GetWorld(), V.Center, V.Extent, V.Rotation, V.bContact ? FColor::Red : FColor::Yellow, false, -1.f, 0, 2.f);
-			}
-		}
-	}
+	// bDebugDraw: the F3 overlay draws the hit volumes (AHWHUD::DrawOverlay; DrawDebugBox would be gone in Shipping).
 }
 
 void UHWDuelSubsystem::StepOneFrame()
@@ -1051,8 +1049,9 @@ void UHWDuelSubsystem::OpenTelemetry()
 	TelemetryPath = FPaths::ConvertRelativePathToFull(FPaths::ProjectSavedDir()) / TEXT("HellwalkerRL") / TEXT("Telemetry")
 		/ FString::Printf(TEXT("%s_e%02d_%s.csv"), *S->SessionId, S->EncountersStarted,
 			S->Tier == EHWTier::Hellwalker ? TEXT("hellwalker") : TEXT("pathbreaker"));
-	FFileHelper::SaveStringToFile(FString(UTF8_TO_TCHAR(HW::ExchangeCsvHeader())) + LINE_TERMINATOR, *TelemetryPath,
-		FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM);
+	// Held in memory and written once when the encounter closes: appending at every exchange put a file open / write / close
+	// on the game thread at the moment of a hit.
+	TelemetryBuffer = FString(UTF8_TO_TCHAR(HW::ExchangeCsvHeader())) + LINE_TERMINATOR;
 }
 
 void UHWDuelSubsystem::FlushTelemetryRows()
@@ -1062,29 +1061,30 @@ void UHWDuelSubsystem::FlushTelemetryRows()
 	if (RowScratch.empty() || TelemetryPath.IsEmpty()) { return; }
 	const UHWSessionSubsystem* S = GetSession();
 	const FTCHARToUTF8 RunId(S != nullptr ? *FString::Printf(TEXT("%s-e%02d"), *S->SessionId, S->EncountersStarted) : TEXT("run"));
-	FString Out;
 	char Line[1024];
 	for (const HW::FExchangeRow& R : RowScratch)
 	{
 		HW::FormatExchangeRow(R, RunId.Get(), Encounter->Brain() != nullptr ? Encounter->Brain()->Mode() : HW::EBrainMode::Pathbreaker,
 			GetMeanFrameMs(), Line, sizeof(Line));
-		Out += UTF8_TO_TCHAR(Line);
-		Out += LINE_TERMINATOR;
+		TelemetryBuffer += UTF8_TO_TCHAR(Line);
+		TelemetryBuffer += LINE_TERMINATOR;
 		++TelemetryRows;
 	}
-	FFileHelper::SaveStringToFile(Out, *TelemetryPath, FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM, &IFileManager::Get(), FILEWRITE_Append);
 }
 
 void UHWDuelSubsystem::CloseTelemetry()
 {
 	if (TelemetryPath.IsEmpty()) { return; }
+	FFileHelper::SaveStringToFile(TelemetryBuffer, *TelemetryPath, FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM);
+	TelemetryBuffer.Reset();
 	const float MeanMs = GetMeanFrameMs();
-	if (MeanMs > 20.f)
+	const float SlowMs = 1000.f * MaxDuelFramesPerTick / HW::FramesPerSecond; // below this rate the duel falls behind real time
+	if (MeanMs > SlowMs)
 	{
 		// A slow session silently produces bad frame data that Phase B would treat as evidence (A2).
 		const FString Discarded = TelemetryPath.Replace(TEXT(".csv"), TEXT(".DISCARDED.csv"));
 		IFileManager::Get().Move(*Discarded, *TelemetryPath);
-		UE_LOG(LogHellwalkerRL, Warning, TEXT("Telemetry DISCARDED: mean frame time %.2f ms > 20 ms (%s)."), MeanMs, *Discarded);
+		UE_LOG(LogHellwalkerRL, Warning, TEXT("Telemetry DISCARDED: mean frame time %.2f ms > %.0f ms (%s)."), MeanMs, SlowMs, *Discarded);
 	}
 	else if (Encounter.IsValid())
 	{

@@ -40,8 +40,9 @@ engineering contract), [PLAN.md](PLAN.md) (the combat spec). Theme research: [Ph
 
 ### Controls (F1 in game shows this panel)
 
-Generated from the live bindings: `hw.Controls` writes every mapping to `Saved/HellwalkerRL/Controls.txt`. Every
-fighting key and the menu keys can be **rebound** (Settings → Controls, keyboard and gamepad separately).
+Generated from the live bindings (in the editor or a Development build, `hw.Controls` writes every mapping to
+`Saved/HellwalkerRL/Controls.txt`). Every fighting key and the menu keys can be **rebound** (Settings → Controls,
+keyboard and gamepad separately).
 
 **Exploring** (the Game Animation Sample's Mover character, worn as Soul)
 
@@ -56,7 +57,7 @@ fighting key and the menu keys can be **rebound** (Settings → Controls, keyboa
 | R | X | **ragdoll** — Space to get back up |
 | Middle mouse | right stick press | strafe |
 | RMB (hold) | LT (hold) | aim |
-| E | Y | ring a bell (rest, checkpoint) · challenge a keeper at a shrine gate |
+| E | Y | ring a bell · challenge a keeper at a shrine gate |
 | M | D-pad left | **the valley map** (pauses): the whole valley, every keeper and bell, where you are; pick the keeper to **track** (↑/↓ + Enter, or click it) · wheel / LT RT zoom · drag / right stick pan · M, Esc or B closes |
 
 While exploring, every keeper still standing has a compass mark and, when it is off screen, an arrow at the screen's
@@ -103,7 +104,8 @@ training and the keeper's view of time are untouched. The ring times the impact 
 delayed heavy still bait — a player who parries every ring is a habit the keeper learns and fakes. Unparryable attacks
 (the killer thrust, the grab) get no ring; their telegraph is **violet**, so red only ever means "parry now".
 
-**Console** (`~`): `hw.Reset [seed]` · `hw.Tier normal|adaptive` · `hw.InjectParry <frames>` (A3) ·
+**Console** (`~`, the editor and Development builds only — the downloaded Shipping game has no console; there a new walk
+from the title menu also makes the keepers forget you): `hw.Reset [seed]` · `hw.Tier normal|adaptive` · `hw.InjectParry <frames>` (A3) ·
 `hw.Autoplay <kind> [skill]` · `hw.Debug` · `hw.Blind` · `hw.ResetModel` (the keepers forget you) · `hw.Menu <page>` ·
 `hw.Map [open|close|track <0|1|2|auto>|zoom <1-4>]` (open world) · `hw.Shot` · `hw.Photo player|boss|off [yaw dist height]` ·
 `hw.Blade <0|1|2> <pitch yaw roll> [x y z]`.
@@ -114,7 +116,7 @@ delayed heavy still bait — a player who parries every ring is a habit the keep
 |---|---|
 | **Valley** | `HWWorldGen`: a 2.4 km heightfield (hills, ridges, a mountain wall) with flattened plazas and carved paths — a pure function of the seed. `AHWOpenWorld` meshes it (10x10 procedural chunks, 460k triangles, collision), lights it (sun, atmosphere, volumetric clouds, fog) and dresses it (`HWDressing`: firs, broken firs, cliff outcrops, boulders, stones, grass and fern clumps from the environment packs; each instance fitted from the mesh's own bounds; ~55k instances). Builds in ~1.5 s. |
 | **Ground** | a code-built four-layer material (`HWTerrainMaterial`): the Lighthouse pack's rock, scrub, path-dirt and ash textures, world-projected and blended by weights the generator writes into the vertex colour (rock on the steeps, dirt on paths and plazas, ash on the heights). Without the pack, the vertex colour is the albedo. |
-| **Sites** | 4 bells (checkpoints), 3 shrines, 6 ruins with the Game Animation Sample's traversable blocks (vault / mantle). With Paragon Monolith: the shrines are dark "Evil" fortresses (gate arch, wall slabs, barbican spires, spiked sconces, broken statues at the approach; the final one with two tall keeps); the ruins are jungle stone (decorated floor, mossy columns, a ring arch, rubble, stone over the traversal blocks); the Western Watch keeps the Lighthouse pack's lighthouse. The greybox stays underneath as the hidden colliders, so the duel floor and walls behave the same with or without the packs. |
+| **Sites** | 4 bells (a death or Continue wakes you at the next keeper's gate; the last bell you rang only catches a fall out of the world), 3 shrines, 6 ruins with the Game Animation Sample's traversable blocks (vault / mantle). With Paragon Monolith: the shrines are dark "Evil" fortresses (gate arch, wall slabs, barbican spires, spiked sconces, broken statues at the approach; the final one with two tall keeps); the ruins are jungle stone (decorated floor, mossy columns, a ring arch, rubble, stone over the traversal blocks); the Western Watch keeps the Lighthouse pack's lighthouse. The greybox stays underneath as the hidden colliders, so the duel floor and walls behave the same with or without the packs. |
 | **Keepers** | the Ninefold Warden (Sevarog, the Warden script) · the Monkey Sage (Wukong, the Sage script) · the Warden, Returned — reborn in stone (the Stone Golem; the final shrine — sealed until the other two fall; reads you in Adaptive AI). |
 | **The Crossroads** | a hamlet around the central bell (`HWSettlement.cpp`, the Desert City kit): mud-brick houses facing the bell with the roads left open, a market of fabric stalls, fire pits, chimney smoke, great rocks around it (its plaza is flattened to 36 m). |
 | **Fire and smoke** | Niagara Examples: fire on logs in the bells' braziers (lit when you ring them), the pits and the shrines' sconces (out when the seal breaks); smoke rising behind every shrine whose keeper lives; a teleport-in as Soul wakes and as both fighters enter a duel; the loser of a duel shatters into embers. |
@@ -493,6 +495,17 @@ Content/HellwalkerRL/          the maps and generated materials (written by Tool
    range, but varies between fights of one session (training fixed it per session), and the 3.5 s breather at insight 0
    is an unobserved mask like Easy's — measured by the arc, not assumed. Fight records carry the assist, the damage scale
    and the insight (web/CONTRACT.md v2), so the paper can split parry and win rates by them.
+13. **The shipped game, checked as Shipping (2026-10-05).** From a downloaded copy on another PC and a Shipping audit:
+   the explorer's slide sank into the ground (the Game Animation Sample reads two animation-debug console variables that
+   Shipping does not register — `HellwalkerRL.cpp` registers them); the duel camera ran through the shrine walls (the arm
+   now collides, and Soul hides when it is pressed against his back); the engine no longer runs at a fixed 60 fps
+   (PLAN §7 asked for it in quantitative runs; in the game it played everything in slow motion on any PC below 60 fps —
+   the duel keeps its own 60 fps frame cursor, real time down to 20 fps, so the local CSV's slow-session cut is 50 ms, not
+   PLAN's 20; `-benchmark` still gives fixed steps for parity); the first launch
+   benchmarks the PC instead of starting at Epic; the texture pool follows the quality and the card's VRAM; the package
+   stages the VC++ runtime installer and the root certificates for Firebase; the release leaves out debug and test files
+   and its joiner checks every part; first-use loads no longer freeze the first hit; one Wukong material drew the default
+   grey checker; the F3 hit volumes and the bell texts said what Shipping did not do.
 
 ## Status against RL.md
 

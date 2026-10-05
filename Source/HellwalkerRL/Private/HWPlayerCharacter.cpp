@@ -38,7 +38,12 @@ AHWPlayerCharacter::AHWPlayerCharacter()
 	CameraBoom->bUsePawnControlRotation = true;
 	CameraBoom->bEnableCameraLag = true;
 	CameraBoom->CameraLagSpeed = 12.f;
-	CameraBoom->bDoCollisionTest = false;
+	// Pull in against walls: backed up to a shrine's parapet with the keeper ahead, the arm ran through the wall and the
+	// screen filled with stone. Fighters' capsules ignore the Camera channel and their parts have no collision, so only
+	// the world (walls, sconces, the sealed gate) shortens it.
+	CameraBoom->bDoCollisionTest = true;
+	CameraBoom->ProbeChannel = ECC_Camera;
+	CameraBoom->ProbeSize = 16.f;
 	BaseSocketOffset = CameraBoom->SocketOffset;
 
 	FollowCamera = CreateDefaultSubobject<UCameraComponent>(TEXT("FollowCamera"));
@@ -78,5 +83,17 @@ void AHWPlayerCharacter::Tick(float DeltaSeconds)
 		Kick = FMath::Max(0.f, Kick - DeltaSeconds * 4.f);
 		const float T = TimeAlive * 60.f;
 		CameraBoom->SocketOffset = BaseSocketOffset + FVector(0.f, FMath::Sin(T * 1.7f), FMath::Sin(T * 2.3f)) * Kick * 12.f;
+	}
+	if (FollowCamera != nullptr)
+	{
+		// Backed against a wall the arm pulls in to Soul's back: hide him rather than fill the screen with (or film from
+		// inside) his body. The pose keeps ticking while hidden (AlwaysTickPoseAndRefreshBones). Hysteresis stops flicker.
+		const float Near = FVector::Dist(FollowCamera->GetComponentLocation(), GetActorLocation() + FVector(0.f, 0.f, 40.f));
+		const bool bHide = bHiddenForCamera ? Near < 150.f : Near < 115.f;
+		if (bHide != bHiddenForCamera)
+		{
+			bHiddenForCamera = bHide;
+			SetActorHiddenInGame(bHide);
+		}
 	}
 }

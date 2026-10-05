@@ -61,6 +61,12 @@ namespace HWBuild
 	 * materials must already carry the flag. Returns the number of material packages that failed to save.
 	 */
 	int32 SaveInstancedUsageForDressing();
+	/**
+	 * Tools\MakeMaps.bat: set (and SAVE) skeletal-mesh usage, plus clothing usage on a mesh with cloth, on the keepers' and
+	 * Soul's base materials. Wukong's mouth material lacked Clothing: the editor recompiles it in memory, the packaged game
+	 * drew the engine's default grey checker on that section. Returns the number of packages that failed to save.
+	 */
+	int32 SaveSkeletalUsageForCasts();
 #endif
 	/** Same, from a package path ("/Game/.../SM_X": the object is the package's base name). */
 	UStaticMesh* OptionalPackageMesh(const TCHAR* Package);

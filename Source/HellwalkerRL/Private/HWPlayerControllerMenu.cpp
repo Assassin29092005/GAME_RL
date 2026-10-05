@@ -123,6 +123,18 @@ void AHWPlayerController::BuildMenuPage(EHWMenuPage Page, EHWSettingsTab Tab, in
 		}
 		const FString Erase = bSave ? TEXT("Begin a new walk?  The saved walk will be erased.") : FString();
 		HWTitle::AddNewWalkItems(OutItems, Erase); // [1] Normal, [2] Adaptive AI
+		const UHWSessionSubsystem* Session = GetGameInstance() != nullptr ? GetGameInstance()->GetSubsystem<UHWSessionSubsystem>() : nullptr;
+		if (Session != nullptr && Session->GetPolicy() == nullptr)
+		{
+			// Without its model file (a partial unzip, an antivirus quarantine) Adaptive AI would quietly play the script.
+			for (FHWMenuItem& I : OutItems)
+			{
+				if (I.Id == HWMenuIds::NewAdaptive)
+				{
+					I.Hint = TEXT("The keepers' mind file is missing from the game folder: they will fight scripted. Unpack the download again.");
+				}
+			}
+		}
 		OutItems.Add(FHWMenuItem::Action(Ids::Settings, TEXT("Settings"), TEXT("Difficulty, parry assist, controls, graphics, audio, accessibility.")));
 		OutItems.Add(FHWMenuItem::Action(Ids::Tutorial, TEXT("How the keeper learns you"), TEXT("Six short pages: the two modes, what it sees, what it remembers, what READ means.")));
 		OutItems.Add(StatsItem(GetGameInstance()));
@@ -294,7 +306,7 @@ void AHWPlayerController::BuildMenuPage(EHWMenuPage Page, EHWSettingsTab Tab, in
 		TArray<FString> Lim;
 		for (float L : UHWSettingsSubsystem::FrameLimits()) { Lim.Add(FrameLimitName(L)); }
 		OutItems.Add(FHWMenuItem::Choice(Ids::FrameLimit, TEXT("Frame rate limit"), Lim, G.FrameLimit,
-			TEXT("The duel runs at a fixed 60 steps per second whatever the frame rate.  ") + Pending));
+			TEXT("Never below 60.  The duel runs at a fixed 60 steps per second whatever the frame rate.  ") + Pending));
 		const bool bDirty = S->HasUnappliedGraphics();
 		FHWMenuItem Apply = FHWMenuItem::Action(Ids::ApplyGraphics, bDirty ? TEXT("Apply  (unapplied changes)") : TEXT("Apply"),
 			TEXT("Apply and save the graphics settings."));

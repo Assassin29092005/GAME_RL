@@ -13,3 +13,6 @@ UNiagaraSystem* HWLoadNiagara(const FString& Path);
 
 /** A burst where a blow resolved (hit / block / parry): colour carries the outcome. */
 void HWSpawnImpactFX(UWorld* World, const FVector& Where, const FLinearColor& Color, float Size);
+
+/** Load the burst and play it once out of sight (at a fight's start), so the first real one neither loads nor waits on shaders. */
+void HWWarmImpactFX(UWorld* World, const FVector& Near);

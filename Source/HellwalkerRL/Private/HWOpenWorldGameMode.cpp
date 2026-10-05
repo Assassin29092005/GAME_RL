@@ -12,6 +12,7 @@
 #include "HWSaveGame.h"
 #include "HWSessionSubsystem.h"
 #include "HWSites.h"
+#include "HWSlashFX.h"
 #include "HWCore/HWSim.h"
 #include "Camera/CameraActor.h"
 #include "Components/SkeletalMeshComponent.h"
@@ -28,6 +29,10 @@
 #include "GameFramework/PlayerController.h"
 #include "Kismet/GameplayStatics.h"
 #include "Misc/CommandLine.h"
+#include "Misc/FileHelper.h"
+#include "HAL/FileManager.h"
+#include "Components/CapsuleComponent.h"
+#include "MoverComponent.h"
 #include "Misc/Parse.h"
 
 namespace
@@ -446,7 +451,9 @@ void AHWOpenWorldGameMode::Interact()
 			Save->BellsLit |= (1 << B->BellIndex);
 			Save->CheckpointBell = B->BellIndex;
 			WriteSave();
-			Banner(B->Title, TEXT("You will wake here"), 3.5f);
+			// Not "you will wake here": a death or Continue wakes you at the next keeper's gate (SpawnAtStart); the rung bell
+			// only catches a fall out of the world.
+			Banner(B->Title, TEXT("The bell rings out across the valley"), 3.5f);
 			return;
 		}
 	}
@@ -492,6 +499,7 @@ void AHWOpenWorldGameMode::BeginDuel(int32 ShrineIndex)
 	Controller->SetControlRotation(FRotator(-12.f, Yaw, 0.f));
 	HWBuild::MeshEffect(HWFX::TeleportIn, Soul->GetDrawnMesh(), FLinearColor(0.35f, 0.6f, 1.f));
 	HWBuild::MeshEffect(HWFX::TeleportIn, Boss->GetDrawnMesh(), FLinearColor(1.f, 0.25f, 0.08f));
+	HWLoadNiagara(HWFX::MeshBurst); // loaded and kept now, not on the killing blow (OnEncounterEnded)
 	ActiveShrine = ShrineIndex;
 	SetPhase(EHWWorldPhase::Duel);
 	Prompt.Reset();
@@ -605,6 +613,7 @@ void AHWOpenWorldGameMode::Tick(float DeltaSeconds)
 		ExplorerBody->SetVisibility(false);
 		ExplorerLook->SetVisibility(true, true);
 	}
+	TickPoseDump(DeltaSeconds);
 	BannerLeft = FMath::Max(0.f, BannerLeft - DeltaSeconds);
 	if (Save != nullptr && (Phase == EHWWorldPhase::Exploring || Phase == EHWWorldPhase::Duel)) { Save->PlaySeconds += DeltaSeconds; }
 
@@ -634,8 +643,7 @@ void AHWOpenWorldGameMode::Tick(float DeltaSeconds)
 	{
 		if (B != nullptr && FVector::Dist2D(At, B->InteractPoint()) < BellReach)
 		{
-			Prompt = (Save != nullptr && Save->CheckpointBell == B->BellIndex) ? FString::Printf(TEXT("[E]  Rest at the %s"), *B->Title)
-				: FString::Printf(TEXT("[E]  Ring the %s"), *B->Title);
+			Prompt = FString::Printf(TEXT("[E]  Ring the %s"), *B->Title);
 		}
 	}
 	for (const AHWShrine* S : Shrines)
@@ -650,6 +658,35 @@ void AHWOpenWorldGameMode::Tick(float DeltaSeconds)
 	{
 		HWBuild::TeleportPawn(Pawn, Bells[Save->CheckpointBell]->WakePoint() + FVector(0.f, 0.f, 150.f), static_cast<float>(Pawn->GetActorRotation().Yaw));
 	}
+}
+
+void AHWOpenWorldGameMode::TickPoseDump(float DeltaSeconds)
+{
+	// Diagnostics (-HWPoseDump=<file>): the explorer's transforms, one line per frame, written straight to a file so it works
+	// in Shipping too (no log there). For the packaged-only slide fault: compare a Shipping dump with a Development one.
+	if (PoseDumpPath.IsEmpty() && !bPoseDumpChecked)
+	{
+		bPoseDumpChecked = true;
+		FParse::Value(FCommandLine::Get(), TEXT("-HWPoseDump="), PoseDumpPath);
+	}
+	if (PoseDumpPath.IsEmpty() || !ExplorerBody.IsValid() || !ExplorerLook.IsValid()) { return; }
+	const AActor* Explorer = ExplorerBody->GetOwner();
+	if (Explorer == nullptr) { return; }
+	PoseDumpClock += DeltaSeconds;
+	const UCapsuleComponent* Cap = Cast<UCapsuleComponent>(Explorer->GetRootComponent());
+	const UMoverComponent* Mover = Explorer->FindComponentByClass<UMoverComponent>();
+	const FVector At = Explorer->GetActorLocation();
+	auto V = [](const FVector& X) { return FString::Printf(TEXT("(%.1f %.1f %.1f)"), X.X, X.Y, X.Z); };
+	auto R = [](const FRotator& X) { return FString::Printf(TEXT("(p%.0f y%.0f r%.0f)"), X.Pitch, X.Yaw, X.Roll); };
+	const FTransform BaseRel = ExplorerBody->GetRelativeTransform();
+	const FTransform RootCS = ExplorerBody->GetSocketTransform(TEXT("root"), RTS_Component);
+	const FTransform PelvisCS = ExplorerBody->GetSocketTransform(TEXT("pelvis"), RTS_Component);
+	const FString Line = FString::Printf(TEXT("%7.3f mode %-12s cap %5.1f | baseRel %s %s | root %s %s | pelvis %s %s | pelvisW-actor %s | lookPelvisW-actor %s | lookRel %s %s\n"),
+		PoseDumpClock, Mover != nullptr ? *Mover->GetMovementModeName().ToString() : TEXT("-"), Cap != nullptr ? Cap->GetScaledCapsuleHalfHeight() : -1.f,
+		*V(BaseRel.GetLocation()), *R(BaseRel.Rotator()), *V(RootCS.GetLocation()), *R(RootCS.Rotator()), *V(PelvisCS.GetLocation()), *R(PelvisCS.Rotator()),
+		*V(ExplorerBody->GetSocketLocation(TEXT("pelvis")) - At), *V(ExplorerLook->GetSocketLocation(TEXT("pelvis")) - At),
+		*V(ExplorerLook->GetRelativeTransform().GetLocation()), *R(ExplorerLook->GetRelativeTransform().Rotator()));
+	FFileHelper::SaveStringToFile(Line, *PoseDumpPath, FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM, &IFileManager::Get(), FILEWRITE_Append);
 }
 
 void AHWOpenWorldGameMode::TickTour(float DeltaSeconds)

@@ -205,7 +205,7 @@ struct FHWGraphicsChoice
 	FIntPoint Resolution = FIntPoint(1920, 1080);
 	uint8 WindowMode = 1;              // EWindowMode: 0 fullscreen, 1 windowed fullscreen, 2 windowed
 	bool bVSync = false;
-	int32 FrameLimit = 3;              // index into FrameLimits()
+	int32 FrameLimit = 2;              // index into FrameLimits(): unlimited
 };
 
 UCLASS()
@@ -275,6 +275,8 @@ public:
 	bool HasUnappliedGraphics() const;
 	/** UGameUserSettings: scalability, resolution, window mode, VSync, frame limit — ApplySettings + SaveSettings. */
 	void ApplyGraphics();
+	/** First launch on a PC (nothing benchmarked yet): the scalability its hardware can hold (the frame rate stays uncapped). */
+	void ChooseFirstLaunchGraphics();
 	static const TArray<float>& FrameLimits();
 	static FString QualityName(int32 Level);
 

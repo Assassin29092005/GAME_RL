@@ -33,6 +33,7 @@ protected:
 	UPROPERTY(VisibleAnywhere, Category = "Hellwalker") TObjectPtr<UCameraComponent> FollowCamera;
 
 	bool bLockedOn = true;
+	bool bHiddenForCamera = false;
 	float Kick = 0.f;
 	FVector BaseSocketOffset = FVector::ZeroVector;
 };

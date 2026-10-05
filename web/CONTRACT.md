@@ -60,7 +60,7 @@ send time.
 | `clientTime` | timestamp | the game's clock |
 | `session` | string | random per game launch (32 hex) |
 | `fightInSession` | int | 1, 2, … within this launch |
-| `gameVersion` | string | e.g. `"1.4.0"` |
+| `gameVersion` | string | e.g. `"1.4.1"`. Up to 1.4.0 the engine ran at a fixed 60 fps, so on a PC below 60 fps the whole game ran slower than real time (40 fps: 67% speed, a parry window 1.5x as long in real time) — frame counts stay exact, but reaction-time comparisons across PCs need care; from 1.4.1 the duel keeps real time down to 20 fps |
 | `mode` | string | `"openworld"` or `"arena"` |
 | `playMode` | string | open world: `"pathbreaker"` (shown in the game as **Normal**: all three keepers scripted) or `"hellwalker"` (shown as **Adaptive AI**: the RL keepers that learn the player); `"arena"` for the duel-only map. `"66days"` comes only from games before 1.4.0 (the mode was removed; its saves now play, and report, as `"hellwalker"`) |
 | `brain` | string | `"rl"` (the RL keeper) or `"script"` (the scripted keeper; also Adaptive AI when no trained model could be loaded) |

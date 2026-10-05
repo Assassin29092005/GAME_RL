@@ -80,6 +80,8 @@ AHWCharacterBase::AHWCharacterBase()
 	BaseMaterial = MaterialF.Object;
 
 	Combat = CreateDefaultSubobject<UHWCombatComponent>(TEXT("Combat"));
+	// The player's camera arm pulls in against the world, never against a fighter crossing behind Soul.
+	GetCapsuleComponent()->SetCollisionResponseToChannel(ECC_Camera, ECR_Ignore);
 
 	VisualRoot = CreateDefaultSubobject<USceneComponent>(TEXT("VisualRoot"));
 	VisualRoot->SetupAttachment(GetCapsuleComponent());

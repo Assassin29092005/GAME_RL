@@ -322,7 +322,7 @@ void AHWHUD::DrawHelp()
 		{ TEXT("R"), TEXT("X"), TEXT("ragdoll - Space to get back up") },
 		{ TEXT("Middle mouse"), TEXT("R3"), TEXT("strafe (face the camera direction)") },
 		{ TEXT("RMB (hold)"), TEXT("LT (hold)"), TEXT("aim") },
-		{ K(EHWBind::Interact), P(EHWBind::Interact), TEXT("ring a bell (rest, checkpoint) / challenge a keeper at a shrine gate") },
+		{ K(EHWBind::Interact), P(EHWBind::Interact), TEXT("ring a bell / challenge a keeper at a shrine gate") },
 		{ K(EHWBind::Map), P(EHWBind::Map), TEXT("the valley map: every keeper and bell, where you are - pick the keeper to track") },
 	};
 	const TArray<FRow> Fight = {
@@ -656,6 +656,28 @@ void AHWHUD::DrawOverlay(UHWDuelSubsystem* Duel)
 	}
 	Lines.Add(FString::Printf(TEXT("telemetry %s"), *Duel->GetTelemetryPath()));
 	for (const FString& L : Duel->GetDecisionLog()) { Lines.Add(L); }
+
+	// The hit volumes of the last contact queries (red = contact), on the canvas: DrawDebugBox is compiled out of Shipping.
+	for (const HW::ESide Side : { HW::ESide::Player, HW::ESide::Boss })
+	{
+		const UHWDuelSubsystem::FHitVolume& V = Duel->GetLastHitVolume(Side);
+		if (V.Frame < 0 || Duel->GetDuelFrame() - V.Frame >= 2) { continue; }
+		FVector C[8];
+		for (int32 K = 0; K < 8; ++K)
+		{
+			const FVector Corner((K & 1) ? V.Extent.X : -V.Extent.X, (K & 2) ? V.Extent.Y : -V.Extent.Y, (K & 4) ? V.Extent.Z : -V.Extent.Z);
+			C[K] = Project(V.Center + V.Rotation.RotateVector(Corner));
+		}
+		const FLinearColor Edge = V.bContact ? FLinearColor::Red : FLinearColor::Yellow;
+		for (int32 A = 0; A < 8; ++A)
+		{
+			for (int32 Bit = 1; Bit < 8; Bit <<= 1)
+			{
+				const int32 B2 = A | Bit; // the 12 edges: corners that differ in one axis
+				if (B2 != A && C[A].Z > 0.f && C[B2].Z > 0.f) { DrawLine(C[A].X, C[A].Y, C[B2].X, C[B2].Y, Edge, 2.f); }
+			}
+		}
+	}
 
 	const float X = 30.f * S;
 	float Y = 130.f * S;
@@ -1878,7 +1900,7 @@ void AHWHUD::DrawMapMenu(AHWPlayerController* PC, const FHWMenu& M)
 	struct FLegendRow { int32 Kind; const TCHAR* What; };
 	const FLegendRow Legend[] = {
 		{ 0, TEXT("You: the way you face (the wedge: your view)") }, { 1, TEXT("Keeper - open") }, { 2, TEXT("Keeper - sealed until the others fall") },
-		{ 3, TEXT("Keeper - cleared") }, { 4, TEXT("The tracked keeper") }, { 5, TEXT("Bell - rung (you rest there)") }, { 6, TEXT("Bell - not yet rung") },
+		{ 3, TEXT("Keeper - cleared") }, { 4, TEXT("The tracked keeper") }, { 5, TEXT("Bell - rung (ringed: the last you rang)") }, { 6, TEXT("Bell - not yet rung") },
 		{ 7, TEXT("Path and plazas") },
 	};
 	const float LegendRowH = 25.f * S;

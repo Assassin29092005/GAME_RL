@@ -249,6 +249,7 @@ private:
 
 	EHWEncounterState State = EHWEncounterState::WaitingToStart;
 	double FrameCursor = 0.0;
+	double IdleFrameCursor = 0.0;   // 60 fps presentation frames while the duel is not running (end-screen fades)
 	int32 Seed = 1;
 	int32 HitstopFrames = 0;
 
@@ -299,6 +300,7 @@ private:
 	static constexpr int32 ParityMaxFrames = 180 * 60;
 
 	FString TelemetryPath;
+	FString TelemetryBuffer;   // the CSV, written by CloseTelemetry
 	double LastRealTime = 0.0;
 	double FrameTimeAccumMs = 0.0;
 	int32 FrameTimeSamples = 0;

@@ -29,8 +29,8 @@ spec; frame data §6), `web/CONTRACT.md` (the telemetry data contract), `README.
 | `Tools\Parity.bat` | the Unreal-vs-simulator gap (`RL\parity.py`): autoplay sessions in the arena (`-HWParity=<jsonl>`, one launch = one session, `-benchmark` fixed steps) vs `hwrl_eval_sessions` on the same bots/keeper → `RL\reports\parity.md`. Builds are locked while it runs |
 | `Tools\CI.bat` | what GitHub Actions runs (`.github/workflows/ci.yml`): core tests, env benchmark, torch/C++/ONNX parity, trainer self-tests — no Unreal |
 | `Tools\Play.bat` / `Tools\Arena.bat` / `Tools\Demo.bat` | the open world / the duel alone (`-HWBoss=Sevarog\|Wukong\|Golem`, `-HWKeeper=0\|1\|2`, `-HWPolicy=<file.hwrl>`) / watch a simulated player fight |
-| `Tools\MakeMaps.bat` | regenerate `Content/HellwalkerRL/Maps/L_Hellwalker` + `L_Arena` via `-run=HWMakeMaps` |
-| `Tools\Package.bat` / `Tools\MakeRelease.bat` / `Tools\ItchPush.bat <user> <game>` | the standalone Shipping game into `Build\Packaged` / the GitHub Releases download (parts < 2 GiB + `Join-and-Extract.bat` + checksums in `Build\Packaged\Release`, uploaded with `gh release`; the site's `downloadUrl` points at the latest release) / upload to itch.io with butler. Shipping ignores a map on the command line (always opens `L_Hellwalker`) |
+| `Tools\MakeMaps.bat` | regenerate `Content/HellwalkerRL/Maps/L_Hellwalker` + `L_Arena` via `-run=HWMakeMaps`, and save the material usage flags a cooked game needs on the (gitignored) pack materials: instancing on the dressing, skeletal + cloth on the keepers (Wukong's mouth drew the default grey checker in Shipping). Re-run after importing packs; `-UsageOnly` (run the commandlet directly) skips the maps |
+| `Tools\Package.bat` / `Tools\MakeRelease.bat` / `Tools\ItchPush.bat <user> <game>` | the standalone Shipping game into `Build\Packaged` (deletes `Build\Packaged\Windows` first; `-prereqs` stages the VC++ runtime installer the bootstrap exe runs) / the GitHub Releases download (parts < 2 GiB + `Join-and-Extract.bat` + checksums in `Build\Packaged\Release`, uploaded with `gh release`; refuses a non-Shipping package or one without the VC++ installer, leaves out PDBs / `Saved` / manifests; the bat checks every part's SHA256, deletes the parts once joined and unpacks with `%SystemRoot%\System32\tar.exe`; `HWREL_SRC/OUT/PART` env vars test it on a small folder; the site's `downloadUrl` points at the latest release) / upload to itch.io with butler. Shipping ignores a map on the command line (always opens `L_Hellwalker`) |
 
 Python: always `RL\.venv\Scripts\python.exe` (torch 2.11 + CUDA 12.8, numpy 2, onnx, onnxruntime, tensorboard). **The C:
 drive is nearly full**: set `TMP`/`TEMP` to `D:\Shadow\GAME_NEW_RL\RL\.pip-tmp`, never write large files to C:.
@@ -90,7 +90,10 @@ checkpoints (B0 at 64 sessions per identity, `RLEval`, a fresh `exploit.py`) and
 checkpoints are not automatically better (see `RL/DESIGN.md` §13 for how the shipped `keeper_1p45e9` was chosen).
 
 **The Unreal layer is presentation + input around that core.** `UHWDuelSubsystem` owns the encounter and the two brains
-(the tier picks one; Hellwalker without a model falls back to the script) and steps it on a fixed frame cursor; it
+(the tier picks one; Hellwalker without a model falls back to the script) and steps it on its own 60 fps frame cursor
+(the engine runs on real time, `bUseFixedFrameRate=False`: a fixed engine rate played the whole game in slow motion below
+60 fps; at most 3 duel frames per rendered frame, so real time holds down to 20 fps and a hitch drops time instead of
+skipping a parry window; `-benchmark` gives fixed 1/60 s steps for parity); it
 passes geometry with `bMirrorY` (Unreal is left-handed, the simulator is not). `UHWSessionSubsystem` loads the policy
 (`Content/HellwalkerRL/RL/hellwalker_rl.hwrl` or `-HWPolicy=`) and holds the session memory, notebook and insight.
 The difficulty also scales the keeper's health damage (`HW::FDuel::KeeperDamageScale`, 1 in training) and sets the
@@ -131,6 +134,17 @@ optional loaders (`HWBuild::Optional*`) with a greybox fallback; packs are local
 loaded only by path must be listed for cooking in `Config/DefaultGame.ini` (`DirectoriesToAlwaysCook`, or the
 asset-manager rule used for the keepers' voice lines). Tracked content: `Content/HellwalkerRL/Maps` (LFS) and the shipped
 policy `Content/HellwalkerRL/RL/hellwalker_rl.hwrl`.
+
+**Shipping is not Development** — check a packaged change in a Shipping package. Shipping has no log, no console (`hw.*`),
+no `DrawDebug*` (the F3 hit volumes are drawn on the HUD canvas), and saves in `%LOCALAPPDATA%\HellwalkerRL\Saved`. Console
+variables the engine registers only with animation debugging read 0 there: the Game Animation Sample Blueprints read two,
+so `HellwalkerRL.cpp` registers them (without it the packaged slide sank the explorer into the ground). A cooked game cannot
+compile shaders (material usage flags: `Tools\MakeMaps.bat`). The first launch on a PC benchmarks the hardware once
+(`UHWSettingsSubsystem::ChooseFirstLaunchGraphics`; the engine default was Epic everywhere); the frame rate is uncapped by
+default and the Graphics tab's lowest limit is 60 (the owner's call: no cap); the texture pool is per
+quality in `DefaultScalability.ini`, clamped to VRAM; `n.VerifyPeer` stages the root certificates Firebase HTTPS needs; the
+duel preloads its sounds and effects at the start (a first-use load froze the first hit). `-HWPoseDump=<file>` writes the
+explorer's transforms per frame, in Shipping too.
 
 **Tests**: `Private/HWCore/HWCoreTests.cpp` (combat + control arm), `HWRLTests.cpp` (the RL keeper), both also run by
 `ThesisSim --tests` with `Sim/Classic/HWClassicTests.cpp`; `Private/Tests/` (UE automation: core/RL wrappers, the shipped

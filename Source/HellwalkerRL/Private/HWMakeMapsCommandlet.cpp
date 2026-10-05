@@ -8,6 +8,7 @@
 #include "Engine/World.h"
 #include "GameFramework/WorldSettings.h"
 #include "Misc/PackageName.h"
+#include "Misc/Parse.h"
 #include "UObject/Package.h"
 #include "UObject/SavePackage.h"
 
@@ -21,16 +22,18 @@ UHWMakeMapsCommandlet::UHWMakeMapsCommandlet()
 
 int32 UHWMakeMapsCommandlet::Main(const FString& Params)
 {
-	(void)Params;
 #if WITH_EDITOR
 	struct FMap { const TCHAR* Package; TSubclassOf<AGameModeBase> Mode; };
 	const FMap Maps[] = {
 		{ TEXT("/Game/HellwalkerRL/Maps/L_Hellwalker"), AHWOpenWorldGameMode::StaticClass() },
 		{ TEXT("/Game/HellwalkerRL/Maps/L_Arena"), AHWGameMode::StaticClass() },
 	};
+	// -UsageOnly: only the material steps below (the maps are tracked in git; re-saving them changes nothing but their bytes).
+	const bool bUsageOnly = FParse::Param(*Params, TEXT("UsageOnly"));
 	int32 Failed = 0;
 	for (const FMap& M : Maps)
 	{
+		if (bUsageOnly) { break; }
 		// An existing map (the editor may already have it loaded as its startup map) is updated in place; otherwise it is
 		// created. Either way it holds nothing but the game-mode override.
 		const FString ShortName = FPackageName::GetShortName(M.Package);
@@ -54,11 +57,14 @@ int32 UHWMakeMapsCommandlet::Main(const FString& Params)
 		if (bCreated) { World->DestroyWorld(false); }
 	}
 	// The code-built materials, saved as assets: a packaged game cannot compile shaders at run time.
-	Failed += HWSaveGeneratedMaterials();
+	if (!bUsageOnly) { Failed += HWSaveGeneratedMaterials(); }
 	// The pack materials the dressing instances: their instanced shaders must be cooked (EnsureInstancedUsage is editor-only).
 	Failed += HWBuild::SaveInstancedUsageForDressing();
+	// The keepers' materials: skeletal (and cloth) usage, likewise needed cooked.
+	Failed += HWBuild::SaveSkeletalUsageForCasts();
 	return Failed;
 #else
+	(void)Params;
 	UE_LOG(LogHellwalkerRL, Error, TEXT("HWMakeMaps needs an editor build."));
 	return 1;
 #endif

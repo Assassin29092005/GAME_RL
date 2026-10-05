@@ -184,6 +184,11 @@ private:
 	 * shows its body again when it falls). */
 	TWeakObjectPtr<class USkeletalMeshComponent> ExplorerBody;
 	TWeakObjectPtr<class USkeletalMeshComponent> ExplorerLook;
+	// -HWPoseDump=<file> (diagnostics): the explorer's transforms per frame, written even in Shipping.
+	FString PoseDumpPath;
+	float PoseDumpClock = 0.f;
+	bool bPoseDumpChecked = false;
+	void TickPoseDump(float DeltaSeconds);
 	bool bLoggedLookFix = false;
 	int32 PendingDuel = -1;
 	float PendingDuelAt = -1.f;

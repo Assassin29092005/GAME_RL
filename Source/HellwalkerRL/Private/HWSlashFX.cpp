@@ -34,6 +34,16 @@ UNiagaraSystem* HWLoadNiagara(const FString& Path)
 	return System;
 }
 
+void HWWarmImpactFX(UWorld* World, const FVector& Near)
+{
+	// Load the burst now and play it once far under the floor: its first real use (the first heavy hit of a launch) loaded
+	// it synchronously, and on a cold shader cache Niagara holds a system back until its pipelines are compiled.
+	UNiagaraSystem* System = HWLoadNiagara(HitSystemPath);
+	if (World == nullptr || System == nullptr) { return; }
+	UNiagaraFunctionLibrary::SpawnSystemAtLocation(World, System, Near - FVector(0.f, 0.f, 50000.f), FRotator::ZeroRotator,
+		FVector(0.5f), true, true, ENCPoolMethod::AutoRelease);
+}
+
 void HWSpawnImpactFX(UWorld* World, const FVector& Where, const FLinearColor& Color, float Size)
 {
 	UNiagaraSystem* System = HWLoadNiagara(HitSystemPath);
